@@ -1,0 +1,19 @@
+{
+  "name": "cli_agent",
+  "version": "1.0.0",
+  "bin": {
+  "ai": "./bin/ai.js"
+},
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "commander": "^14.0.3"
+  }
+}
