@@ -30,10 +30,13 @@ function getGitContext(cwd) {
             isGitRepo: true,
             repoName,
             branch,
+            cwd,        // Pass cwd for git diff operations
+            repoRoot,   // Pass repoRoot for full context
         };
     } catch (err) {
         return {
             isGitRepo: false,
+            cwd,
         };
     }
 }

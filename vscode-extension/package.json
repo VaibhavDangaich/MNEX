@@ -1,0 +1,65 @@
+{
+  "name": "ai-agent-monitor",
+  "displayName": "AI Agent Monitor",
+  "description": "Monitors editor activity for the AI Agent context system",
+  "version": "0.0.1",
+  "publisher": "ai-agent",
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "categories": ["Other"],
+  "activationEvents": ["onStartupFinished"],
+  "main": "./extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "aiAgent.toggleMonitoring",
+        "title": "AI Agent: Toggle Editor Monitoring"
+      },
+      {
+        "command": "aiAgent.showStatus",
+        "title": "AI Agent: Show Monitoring Status"
+      },
+      {
+        "command": "aiAgent.syncNow",
+        "title": "AI Agent: Sync Context Now"
+      }
+    ],
+    "configuration": {
+      "title": "AI Agent Monitor",
+      "properties": {
+        "aiAgent.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable editor monitoring"
+        },
+        "aiAgent.storagePath": {
+          "type": "string",
+          "default": "",
+          "description": "Path to AI Agent storage folder"
+        },
+        "aiAgent.trackFiles": {
+          "type": "boolean",
+          "default": true,
+          "description": "Track file open/close/save events"
+        },
+        "aiAgent.trackErrors": {
+          "type": "boolean",
+          "default": true,
+          "description": "Track diagnostics and errors"
+        },
+        "aiAgent.trackSelection": {
+          "type": "boolean",
+          "default": false,
+          "description": "Track cursor position and selection"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "package": "npx vsce package --allow-missing-repository"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.80.0"
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "cli_agent": [
+    {
+      "id": "1769887470866",
+      "text": "This is a context-aware AI CLI agent built with Node.js and LangChain",
+      "createdAt": "2026-01-31T19:24:30.866Z"
+    },
+    {
+      "id": "1769888265617",
+      "text": "The CLI uses LangChain for prompt templates and supports both OpenAI and Gemini",
+      "createdAt": "2026-01-31T19:37:45.617Z"
+    }
+  ]
+}
