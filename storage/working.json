@@ -2,14 +2,35 @@
   "cli_agent": {
     "project": "cli_agent",
     "startedAt": "2026-01-31T19:50:08.767Z",
-    "lastActivity": "2026-01-31T20:13:43.748Z",
-    "context": "",
+    "lastActivity": "2026-01-31T20:46:45.242Z",
+    "context": "The user is checking the status of their Git repository.",
     "currentTask": "Building a context-aware AI agent with terminal monitoring",
     "recentErrors": [],
-    "tags": [],
+    "tags": [
+      "git",
+      "version control",
+      "repository"
+    ],
     "decisions": [],
     "blockers": [],
     "lastFile": "episodic.json",
-    "lastFileAction": "save"
+    "lastFileAction": "save",
+    "lastCommand": "git status"
+  },
+  "null": {
+    "project": null,
+    "startedAt": "2026-01-31T20:45:48.107Z",
+    "lastActivity": "2026-01-31T20:45:48.107Z",
+    "context": "User is checking the status of a Git repository.",
+    "currentTask": "",
+    "recentErrors": [],
+    "tags": [
+      "git",
+      "version control",
+      "status check"
+    ],
+    "decisions": [],
+    "blockers": [],
+    "lastCommand": "git status"
   }
 }

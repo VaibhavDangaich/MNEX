@@ -47,7 +47,7 @@ async function store(projectName, text, apiKey) {
 
 /**
  * Search Supermemory for relevant memories
- * @param {string} projectName - Filter by project (containerTag)
+ * @param {string|null} projectName - Filter by project (containerTag), null for global search
  * @param {string} query - Search query
  * @param {string} apiKey - Supermemory API key
  * @param {number} limit - Max results
@@ -60,11 +60,19 @@ async function search(projectName, query, apiKey, limit = 5) {
 
     try {
         const supermemory = getClient(apiKey);
-        const results = await supermemory.search.memories({
+        
+        // Build search params - omit containerTag if null (global search)
+        const searchParams = {
             q: query,
-            containerTag: projectName,
             limit,
-        });
+        };
+        
+        // Only add containerTag if projectName is provided
+        if (projectName) {
+            searchParams.containerTag = projectName;
+        }
+        
+        const results = await supermemory.search.memories(searchParams);
         return results.results || results || [];
     } catch (error) {
         console.warn("Supermemory search failed:", error.message);

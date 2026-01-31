@@ -116,8 +116,13 @@ async function formatGlobalActivity(events, currentProject) {
     if (!events || events.length === 0) return "";
 
     // Group by project, show what user was doing
+    // Filter out non-project entries (null, unknown, system paths)
     const byProject = {};
     for (const e of events) {
+        // Skip non-project entries
+        if (!e.project || e.project === "unknown" || e.project === null || isSystemPath(e.project)) {
+            continue;
+        }
         if (!byProject[e.project]) {
             byProject[e.project] = [];
         }
@@ -139,16 +144,29 @@ async function formatGlobalActivity(events, currentProject) {
 }
 
 /**
- * Get list of recently active projects (excluding current)
+ * Get list of recently active projects (excluding current and non-projects)
  */
 function getRecentlyActiveProjects(events, currentProject) {
     const projects = new Set();
     for (const e of events) {
-        if (e.project && e.project !== currentProject && e.project !== "unknown") {
+        // Only include real projects - filter out null, undefined, "unknown", and system paths
+        if (e.project && 
+            e.project !== currentProject && 
+            e.project !== "unknown" &&
+            e.project !== null &&
+            !isSystemPath(e.project)) {
             projects.add(e.project);
         }
     }
     return [...projects];
+}
+
+/**
+ * Check if a path looks like a system directory (not a real project)
+ */
+function isSystemPath(name) {
+    const systemPaths = ["tmp", "var", "etc", "usr", "bin", "home", "Users", "root"];
+    return systemPaths.includes(name);
 }
 
 /**

@@ -63,24 +63,28 @@ function extractCommitMessage(command) {
 
 /**
  * Detect project name from directory
+ * Returns null for non-project directories (like /tmp)
  */
 function detectProject(cwd) {
-    if (!cwd) return "unknown";
+    if (!cwd) return null;
 
-    // Try to find git repo name
-    try {
-        const { execSync } = require("child_process");
-        const repoRoot = execSync("git rev-parse --show-toplevel", {
-            cwd,
-            stdio: ["pipe", "pipe", "ignore"],
-        })
-            .toString()
-            .trim();
-        return path.basename(repoRoot);
-    } catch {
-        // Not a git repo, use folder name
+    const { getProjectName, isRealProject } = require("../context");
+    
+    // Use the centralized project detection
+    const projectName = getProjectName(cwd);
+    
+    // Only return a project name if it's a real project
+    if (projectName) {
+        return projectName;
+    }
+    
+    // Check if it's a real project even without git
+    if (isRealProject(cwd)) {
         return path.basename(cwd);
     }
+    
+    // Not a real project - return null
+    return null;
 }
 
 /**

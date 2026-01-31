@@ -1,5 +1,51 @@
 const { execSync } = require("child_process");
 const path = require("path");
+const fs = require("fs");
+
+/**
+ * Check if a directory is a real project (not just any random folder)
+ * A project has: git repo, package.json, Cargo.toml, pyproject.toml, etc.
+ */
+function isRealProject(cwd) {
+    const projectIndicators = [
+        ".git",
+        "package.json",
+        "Cargo.toml",
+        "pyproject.toml",
+        "go.mod",
+        "pom.xml",
+        "build.gradle",
+        "Makefile",
+        "CMakeLists.txt",
+        ".project",
+        "requirements.txt",
+        "setup.py",
+    ];
+
+    for (const indicator of projectIndicators) {
+        if (fs.existsSync(path.join(cwd, indicator))) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/**
+ * Get project name only if it's a real project
+ */
+function getProjectName(cwd) {
+    const gitContext = getGitContext(cwd);
+    
+    if (gitContext.isGitRepo) {
+        return gitContext.repoName;
+    }
+    
+    if (isRealProject(cwd)) {
+        return path.basename(cwd);
+    }
+    
+    return null; // Not a project, just a random directory
+}
 
 function getGitContext(cwd) {
     try {
@@ -28,14 +74,16 @@ function getGitContext(cwd) {
 
         return {
             isGitRepo: true,
+            isProject: true,
             repoName,
             branch,
-            cwd,        // Pass cwd for git diff operations
-            repoRoot,   // Pass repoRoot for full context
+            cwd,
+            repoRoot,
         };
     } catch (err) {
         return {
             isGitRepo: false,
+            isProject: isRealProject(cwd),
             cwd,
         };
     }
@@ -43,4 +91,6 @@ function getGitContext(cwd) {
 
 module.exports = {
     getGitContext,
+    getProjectName,
+    isRealProject,
 };

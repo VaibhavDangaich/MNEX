@@ -23,12 +23,19 @@ program
     .version("1.0.0");
 
 /**
- * Helper to get project name
+ * Helper to get project name (returns null if not in a real project)
  */
 function getProjectName() {
     const cwd = process.cwd();
-    const gitContext = getGitContext(cwd);
-    return gitContext.isGitRepo ? gitContext.repoName : cwd.split("/").pop();
+    const { getProjectName: getProject } = require("../core/context");
+    return getProject(cwd);
+}
+
+/**
+ * Check if we're in a real project
+ */
+function isInProject() {
+    return getProjectName() !== null;
 }
 
 // ============================================
@@ -46,8 +53,12 @@ program
         console.log("\n🤖 AI Agent");
         console.log("─".repeat(40));
 
-        // Show context
-        console.log(`📁 Project: ${projectName}`);
+        // Show context - differentiate between project and random directory
+        if (projectName) {
+            console.log(`📁 Project: ${projectName}`);
+        } else {
+            console.log(`📍 Directory: ${cwd.split("/").pop()} (not a project)`);
+        }
         if (gitContext.isGitRepo) {
             console.log(`🌿 Branch: ${gitContext.branch}`);
         }
@@ -315,6 +326,81 @@ program
 
         // Prevent exit
         await new Promise(() => {});
+    });
+
+// ============================================
+// ai supermemory - Debug Supermemory connection
+// ============================================
+program
+    .command("supermemory")
+    .description("Test and debug Supermemory connection")
+    .option("-s, --store <text>", "Store a test memory")
+    .option("-q, --query <query>", "Search memories")
+    .option("-l, --list", "List recent memories")
+    .action(async (options) => {
+        const supermemory = require("../core/memory/supermemory");
+        const config = require("../core/config");
+        const apiKey = config.get("supermemory.apiKey");
+        const projectName = getProjectName();
+
+        console.log("\n🧠 Supermemory Debug");
+        console.log("─".repeat(40));
+
+        if (!apiKey) {
+            console.log("❌ No SUPERMEMORY_API_KEY found in .env");
+            console.log("   Add: SUPERMEMORY_API_KEY=your-key-here\n");
+            return;
+        }
+
+        console.log(`✅ API Key: ${apiKey.substring(0, 10)}...`);
+        console.log(`📁 Project: ${projectName}\n`);
+
+        if (options.store) {
+            console.log(`📤 Storing: "${options.store}"`);
+            try {
+                const result = await supermemory.store(projectName, options.store, apiKey);
+                console.log("✅ Stored successfully!");
+                console.log("   Result:", JSON.stringify(result, null, 2));
+            } catch (error) {
+                console.log("❌ Store failed:", error.message);
+            }
+        }
+
+        if (options.query) {
+            console.log(`🔍 Searching: "${options.query}"`);
+            try {
+                const results = await supermemory.search(projectName, options.query, apiKey);
+                console.log(`✅ Found ${results.length} results:`);
+                results.forEach((r, i) => {
+                    console.log(`\n${i + 1}. ${r.content?.substring(0, 200) || JSON.stringify(r)}`);
+                });
+            } catch (error) {
+                console.log("❌ Search failed:", error.message);
+            }
+        }
+
+        if (options.list) {
+            console.log("📋 Searching for all memories...");
+            try {
+                // Search with empty query to get recent memories
+                const results = await supermemory.search(projectName, "*", apiKey, 10);
+                console.log(`✅ Found ${results.length} memories:`);
+                results.forEach((r, i) => {
+                    console.log(`\n${i + 1}. ${r.content?.substring(0, 200) || JSON.stringify(r)}`);
+                });
+            } catch (error) {
+                console.log("❌ List failed:", error.message);
+            }
+        }
+
+        if (!options.store && !options.query && !options.list) {
+            console.log("Usage:");
+            console.log("  ai supermemory --store 'test memory'  # Store a memory");
+            console.log("  ai supermemory --query 'search term'  # Search memories");
+            console.log("  ai supermemory --list                 # List all memories");
+        }
+
+        console.log("");
     });
 
 // ============================================
