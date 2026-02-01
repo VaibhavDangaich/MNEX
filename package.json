@@ -1,6 +1,6 @@
 {
   "name": "@vaibhav_dangaich/ai-agent",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "bin": {
     "ai": "bin/ai.js",
     "ai-agent": "bin/ai.js"
