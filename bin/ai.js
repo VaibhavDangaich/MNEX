@@ -39,6 +39,7 @@ if (!envLoaded && !process.env.OPENAI_API_KEY && !process.env.GEMINI_API_KEY) {
 const { Command } = require("commander");
 const { getGitContext } = require("../core/context");
 const memory = require("../core/memory");
+const conversation = require("../core/memory/conversation");
 const { formatForDisplay, getMessages } = require("../core/prompt");
 const llm = require("../core/llm");
 const terminal = require("../core/monitor/terminal");
@@ -118,10 +119,15 @@ program
         // Call LLM with LangChain prompt template
         try {
             console.log("\n💬 Response:\n");
-            await llm.streamChat(question, gitContext, recalled, (chunk) => {
+            const response = await llm.streamChat(question, gitContext, recalled, (chunk) => {
                 process.stdout.write(chunk);
             });
             console.log("\n");
+
+            // Save conversation for multi-turn context
+            const projName = projectName || cwd.split("/").pop();
+            conversation.addTurn(projName, question, response);
+
         } catch (error) {
             console.error("\n❌ Error:", error.message);
             process.exit(1);

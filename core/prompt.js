@@ -1,10 +1,10 @@
 /**
  * Prompt Builder
  * Constructs prompts using LangChain PromptTemplates
- * Injects all memory layers: Episodic, Working, Semantic + Global + Git
+ * Injects all memory layers: Episodic, Working, Semantic + Global + Git + Conversation
  */
 
-const { ChatPromptTemplate, SystemMessagePromptTemplate, HumanMessagePromptTemplate } = require("@langchain/core/prompts");
+const { ChatPromptTemplate, SystemMessagePromptTemplate, HumanMessagePromptTemplate, MessagesPlaceholder } = require("@langchain/core/prompts");
 
 // System prompt template with all context layers including GLOBAL
 const SYSTEM_TEMPLATE = `You are a context-aware AI assistant with full knowledge of the user's current work across ALL their projects.
@@ -25,15 +25,19 @@ const SYSTEM_TEMPLATE = `You are a context-aware AI assistant with full knowledg
 
 {semanticSection}
 
+{conversationSection}
+
 ## Instructions
 - You have access to the user's recent activity across ALL projects on their machine
+- You remember our recent conversation - refer back to it when answering follow-up questions
 - Even if the user is in a random directory, you know what they were working on
 - You can see EXACT CODE CHANGES from git diffs - use this to answer "what changed" questions
 - Answer questions using ALL the context above
 - Be concise but thorough
 - Reference specific commands, files, or errors when relevant
 - If asked "what was I working on?", summarize recent activity across projects
-- If asked "what changed in the code?", refer to the git diff section for exact changes`;
+- If asked "what changed in the code?", refer to the git diff section for exact changes
+- For follow-up questions, use conversation context to understand "it", "that", "the same thing", etc.`;
 
 // Create the chat prompt template
 const chatPrompt = ChatPromptTemplate.fromMessages([
@@ -43,6 +47,7 @@ const chatPrompt = ChatPromptTemplate.fromMessages([
 
 // Import git monitor for code diff info
 const gitmonitor = require("./monitor/gitmonitor");
+const conversation = require("./memory/conversation");
 
 /**
  * Build git diff section (uncommitted changes + recent commits)
@@ -130,6 +135,15 @@ function buildSemanticSection(memory) {
 }
 
 /**
+ * Build conversation history section
+ * @param {string} projectName - Current project
+ * @returns {string} Formatted conversation history
+ */
+function buildConversationSection(projectName) {
+    return conversation.formatForPrompt(projectName, 5);
+}
+
+/**
  * Build the complete prompt using LangChain templates
  * @param {string} question - User's question
  * @param {Object} context - Git context
@@ -137,8 +151,9 @@ function buildSemanticSection(memory) {
  * @returns {Object} Formatted prompt values for LangChain
  */
 function buildPromptValues(question, context, memory) {
+    const projectName = context.isGitRepo ? context.repoName : "Unknown";
     return {
-        projectName: context.isGitRepo ? context.repoName : "Unknown",
+        projectName,
         branch: context.isGitRepo ? context.branch : "N/A",
         gitSection: buildGitSection(context),
         globalSection: buildGlobalSection(memory),
@@ -146,6 +161,7 @@ function buildPromptValues(question, context, memory) {
         episodicSection: buildEpisodicSection(memory),
         memorySection: buildMemorySection(memory),
         semanticSection: buildSemanticSection(memory),
+        conversationSection: buildConversationSection(projectName),
         question,
     };
 }
