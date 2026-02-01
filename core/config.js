@@ -67,9 +67,20 @@ function get(key) {
 
 /**
  * Get the current LLM provider
+ * Priority: explicit LLM_PROVIDER > auto-detect from available API keys > default to openai
  */
 function getLLMProvider() {
-    return get("llm.provider") || "openai";
+    // Check explicit provider setting
+    const explicit = get("llm.provider");
+    if (explicit) return explicit;
+    
+    // Auto-detect based on which API key is available
+    if (process.env.GEMINI_API_KEY && !process.env.OPENAI_API_KEY) {
+        return "gemini";
+    }
+    
+    // Default to openai
+    return "openai";
 }
 
 /**

@@ -583,10 +583,12 @@ program
             if (choice === "1") {
                 console.log("\nGet your OpenAI API key at: https://platform.openai.com/api-keys\n");
                 const apiKey = await question("Enter your OpenAI API key: ");
+                envContent += `LLM_PROVIDER=openai\n`;
                 envContent += `OPENAI_API_KEY=${apiKey.trim()}\n`;
             } else if (choice === "2") {
                 console.log("\nGet your Gemini API key at: https://makersuite.google.com/app/apikey\n");
                 const apiKey = await question("Enter your Gemini API key: ");
+                envContent += `LLM_PROVIDER=gemini\n`;
                 envContent += `GEMINI_API_KEY=${apiKey.trim()}\n`;
             } else {
                 console.log("Invalid choice. Run 'ai init' again.");
