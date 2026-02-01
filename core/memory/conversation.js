@@ -2,6 +2,7 @@
  * Conversation Memory
  * Stores recent Q&A exchanges for multi-turn conversations
  * Uses LangChain message types for proper formatting
+ * Syncs to Supermemory for cross-device access
  */
 
 const fs = require("fs");
@@ -48,11 +49,12 @@ function save(data) {
 
 /**
  * Add a conversation turn (question + answer)
+ * Also syncs to Supermemory for cross-device access
  * @param {string} project - Project name for scoping
  * @param {string} question - User's question
  * @param {string} answer - AI's response
  */
-function addTurn(project, question, answer) {
+async function addTurn(project, question, answer) {
     const data = load();
 
     const turn = {
@@ -69,7 +71,21 @@ function addTurn(project, question, answer) {
     data.conversations = data.conversations.slice(0, MAX_CONVERSATIONS);
 
     save(data);
+
+    // Sync to Supermemory for cross-device access (async, non-blocking)
+    syncToCloud(project, question, answer).catch(() => {
+        // Silent fail - don't break user experience
+    });
+
     return turn;
+}
+
+/**
+ * Sync conversation to Supermemory
+ */
+async function syncToCloud(project, question, answer) {
+    const cloudsync = require("./cloudsync");
+    return cloudsync.syncConversation(project, question, answer);
 }
 
 /**

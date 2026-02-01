@@ -94,9 +94,24 @@ async function logFileEvent(action, filePath) {
         lastFileAction: action,
     });
 
+    // Sync important file edits to cloud
+    syncToCloud(project, action, event).catch(() => {});
+
     if (config.get("debug")) {
         console.log(`[watch] ${action}: ${relativePath}`);
     }
+}
+
+/**
+ * Sync important file edits to Supermemory
+ */
+async function syncToCloud(project, action, event) {
+    const cloudsync = require("../memory/cloudsync");
+    return cloudsync.syncActivity(project, "file_edit", {
+        file: event.file,
+        action: action,
+        fullPath: event.fullPath,
+    });
 }
 
 /**

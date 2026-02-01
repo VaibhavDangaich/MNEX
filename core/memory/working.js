@@ -111,19 +111,34 @@ async function update(project, updates) {
 
 /**
  * Set the current task/goal for a project
+ * Also syncs to Supermemory for cross-device access
  * @param {string} project
  * @param {string} task
  */
-function setCurrentTask(project, task) {
-    return update(project, { currentTask: task });
+async function setCurrentTask(project, task) {
+    const result = await update(project, { currentTask: task });
+    
+    // Sync task to cloud (async, non-blocking)
+    syncTaskToCloud(project, task).catch(() => {});
+    
+    return result;
+}
+
+/**
+ * Sync task to Supermemory
+ */
+async function syncTaskToCloud(project, task) {
+    const cloudsync = require("./cloudsync");
+    return cloudsync.syncTask(project, task);
 }
 
 /**
  * Add a decision/note to working memory
+ * Also syncs to Supermemory
  * @param {string} project
  * @param {string} decision
  */
-function addDecision(project, decision) {
+async function addDecision(project, decision) {
     const data = load();
     if (!data[project]) {
         data[project] = createDefault(project);

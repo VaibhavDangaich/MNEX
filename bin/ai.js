@@ -438,6 +438,108 @@ program
     });
 
 // ============================================
+// ai sync - Sync current context to cloud
+// ============================================
+program
+    .command("sync")
+    .description("Sync current context to cloud for multi-device access")
+    .action(async () => {
+        const cloudsync = require("../core/memory/cloudsync");
+        const working = require("../core/memory/working");
+        const config = require("../core/config");
+        const projectName = getProjectName();
+
+        console.log("\n☁️  Cloud Sync");
+        console.log("─".repeat(40));
+
+        const apiKey = config.get("supermemory.apiKey");
+        if (!apiKey) {
+            console.log("❌ No Supermemory API key configured");
+            console.log("   Run 'ai init' to set up cloud sync\n");
+            return;
+        }
+
+        console.log(`📱 Device: ${cloudsync.getDeviceId()}`);
+        console.log(`📁 Project: ${projectName || "global"}`);
+        console.log("");
+
+        // Sync working memory
+        if (projectName) {
+            const workingMem = working.get(projectName);
+            console.log("📤 Syncing working context...");
+            await cloudsync.syncWorkingContext(projectName, workingMem);
+            console.log("   ✅ Working context synced");
+        }
+
+        // Show sync status
+        console.log("\n📊 What gets synced automatically:");
+        console.log("   ✓ Conversations (every ai ask)");
+        console.log("   ✓ Tasks (ai task)");
+        console.log("   ✓ Important file edits");
+        console.log("   ✓ Git commits");
+        console.log("   ✓ Memories (ai remember)");
+        console.log("\n✨ Continue on any device with the same Supermemory key!\n");
+    });
+
+// ============================================
+// ai handoff - Prepare for device switch
+// ============================================
+program
+    .command("handoff")
+    .description("Sync everything for seamless device handoff")
+    .action(async () => {
+        const cloudsync = require("../core/memory/cloudsync");
+        const working = require("../core/memory/working");
+        const episodic = require("../core/memory/episodic");
+        const config = require("../core/config");
+        const projectName = getProjectName();
+        const cwd = process.cwd();
+        const gitContext = getGitContext(cwd);
+
+        console.log("\n🔄 Device Handoff");
+        console.log("─".repeat(40));
+
+        const apiKey = config.get("supermemory.apiKey");
+        if (!apiKey) {
+            console.log("❌ No Supermemory API key configured");
+            console.log("   Run 'ai init' to enable multi-device sync\n");
+            return;
+        }
+
+        console.log(`📱 From: ${cloudsync.getDeviceId()}`);
+        console.log(`📁 Project: ${projectName || cwd.split("/").pop()}`);
+        console.log("");
+
+        // Gather all context
+        const workingMem = projectName ? working.get(projectName) : {};
+        const recentEvents = await episodic.getRecent(projectName, 10);
+
+        const context = {
+            currentTask: workingMem.currentTask,
+            branch: gitContext.branch,
+            recentFiles: recentEvents
+                .filter(e => e.type === "editor")
+                .map(e => e.file)
+                .slice(0, 5),
+            recentActivity: recentEvents
+                .map(e => e.command || `${e.action} ${e.file}`)
+                .slice(0, 5),
+            summary: workingMem.context,
+        };
+
+        console.log("📤 Syncing everything...");
+        const result = await cloudsync.handoff(projectName || "global", context);
+
+        if (result.success) {
+            console.log("   ✅ Context synced to cloud");
+            console.log("\n🎉 Ready! Continue on any device.");
+            console.log("   Just use 'ai ask' - your context is there.\n");
+        } else {
+            console.log(`   ❌ Sync failed: ${result.error}\n`);
+        }
+    });
+
+// ============================================
 // ai init - First time setup wizard
 // ============================================
 program
