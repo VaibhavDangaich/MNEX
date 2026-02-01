@@ -1,18 +1,53 @@
 {
-  "name": "cli_agent",
+  "name": "@vaibhav_dangaich/ai-agent",
   "version": "1.0.0",
   "bin": {
-    "ai": "./bin/ai.js"
+    "ai": "bin/ai.js",
+    "ai-agent": "bin/ai.js"
   },
-  "description": "Context-aware AI CLI agent with persistent memory",
-  "main": "index.js",
+  "description": "Context-aware AI CLI agent with persistent memory - your digital cognitive layer that remembers everything you do",
+  "main": "bin/ai.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
     "postinstall": "node scripts/postinstall.js"
   },
-  "keywords": ["ai", "cli", "agent", "memory", "context"],
-  "author": "",
-  "license": "ISC",
+  "keywords": [
+    "ai",
+    "cli",
+    "agent",
+    "memory",
+    "context",
+    "llm",
+    "openai",
+    "gemini",
+    "terminal",
+    "productivity",
+    "developer-tools",
+    "supermemory"
+  ],
+  "author": "Vaibhav Dangaich",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/VaibhavDangaich/cli_agent.git"
+  },
+  "bugs": {
+    "url": "https://github.com/VaibhavDangaich/cli_agent/issues"
+  },
+  "homepage": "https://github.com/VaibhavDangaich/cli_agent#readme",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "files": [
+    "bin/",
+    "core/",
+    "config/",
+    "hooks/",
+    "scripts/",
+    "storage/.gitkeep",
+    "README.md",
+    ".env.example"
+  ],
   "type": "commonjs",
   "dependencies": {
     "@langchain/core": "^1.1.18",

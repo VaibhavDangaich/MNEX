@@ -5,8 +5,36 @@
  * No intelligence here - just wires commands to core modules
  */
 
-// Load environment variables from .env file
-require("dotenv").config({ path: require("path").join(__dirname, "../.env") });
+const path = require("path");
+const fs = require("fs");
+const os = require("os");
+
+// Load environment variables from multiple locations (priority order):
+// 1. Current working directory .env
+// 2. Home directory ~/.ai-agent.env
+// 3. Home directory ~/.config/ai-agent/.env
+// 4. Package directory .env (fallback for development)
+
+const envPaths = [
+    path.join(process.cwd(), ".env"),
+    path.join(os.homedir(), ".ai-agent.env"),
+    path.join(os.homedir(), ".config", "ai-agent", ".env"),
+    path.join(__dirname, "../.env"),
+];
+
+let envLoaded = false;
+for (const envPath of envPaths) {
+    if (fs.existsSync(envPath)) {
+        require("dotenv").config({ path: envPath });
+        envLoaded = true;
+        break;
+    }
+}
+
+// If no .env found and no API keys set, show warning on first run
+if (!envLoaded && !process.env.OPENAI_API_KEY && !process.env.GEMINI_API_KEY) {
+    // Will show setup prompt in commands that need API keys
+}
 
 const { Command } = require("commander");
 const { getGitContext } = require("../core/context");
@@ -404,16 +432,103 @@ program
     });
 
 // ============================================
-// ai setup
+// ai init - First time setup wizard
+// ============================================
+program
+    .command("init")
+    .description("Initialize AI Agent with your API keys")
+    .action(async () => {
+        const readline = require("readline");
+        const configDir = path.join(os.homedir(), ".config", "ai-agent");
+        const configFile = path.join(configDir, ".env");
+
+        console.log("\n🤖 AI Agent Setup Wizard");
+        console.log("─".repeat(40));
+
+        // Check if already configured
+        if (process.env.OPENAI_API_KEY || process.env.GEMINI_API_KEY) {
+            console.log("✅ API key already configured!\n");
+            console.log("To reconfigure, edit: " + configFile);
+            console.log("Or set environment variables: OPENAI_API_KEY / GEMINI_API_KEY\n");
+            return;
+        }
+
+        console.log("\nThis will create a config file at:");
+        console.log(`  ${configFile}\n`);
+
+        const rl = readline.createInterface({
+            input: process.stdin,
+            output: process.stdout,
+        });
+
+        const question = (prompt) => new Promise((resolve) => rl.question(prompt, resolve));
+
+        try {
+            console.log("Which LLM provider do you want to use?");
+            console.log("  1) OpenAI (GPT-4, GPT-3.5)");
+            console.log("  2) Google Gemini\n");
+
+            const choice = await question("Enter 1 or 2: ");
+
+            let envContent = "# AI Agent Configuration\n\n";
+
+            if (choice === "1") {
+                console.log("\nGet your OpenAI API key at: https://platform.openai.com/api-keys\n");
+                const apiKey = await question("Enter your OpenAI API key: ");
+                envContent += `OPENAI_API_KEY=${apiKey.trim()}\n`;
+            } else if (choice === "2") {
+                console.log("\nGet your Gemini API key at: https://makersuite.google.com/app/apikey\n");
+                const apiKey = await question("Enter your Gemini API key: ");
+                envContent += `GEMINI_API_KEY=${apiKey.trim()}\n`;
+            } else {
+                console.log("Invalid choice. Run 'ai init' again.");
+                rl.close();
+                return;
+            }
+
+            console.log("\n(Optional) Supermemory for semantic memory: https://supermemory.ai");
+            const superKey = await question("Enter Supermemory API key (or press Enter to skip): ");
+            if (superKey.trim()) {
+                envContent += `SUPERMEMORY_API_KEY=${superKey.trim()}\n`;
+            }
+
+            // Create config directory and file
+            if (!fs.existsSync(configDir)) {
+                fs.mkdirSync(configDir, { recursive: true });
+            }
+            fs.writeFileSync(configFile, envContent);
+
+            console.log("\n✅ Configuration saved to: " + configFile);
+            console.log("\n🎉 Setup complete! Try:");
+            console.log('   ai ask "hello, what can you do?"\n');
+
+        } catch (error) {
+            console.error("Setup failed:", error.message);
+        } finally {
+            rl.close();
+        }
+    });
+
+// ============================================
+// ai setup - Show setup instructions
 // ============================================
 program
     .command("setup")
-    .description("Setup shell hook for terminal monitoring")
+    .description("Show setup instructions for monitoring")
     .action(() => {
-        const hookPath = require("path").join(__dirname, "../hooks/zsh-hook.sh");
+        const hookPath = path.join(__dirname, "../hooks/zsh-hook.sh");
+        const configFile = path.join(os.homedir(), ".config", "ai-agent", ".env");
 
         console.log("\n🔧 AI Agent Setup");
         console.log("─".repeat(40));
+
+        // Check API key status
+        if (process.env.OPENAI_API_KEY || process.env.GEMINI_API_KEY) {
+            console.log("✅ API Key: Configured");
+        } else {
+            console.log("❌ API Key: Not configured");
+            console.log("   Run: ai init\n");
+        }
 
         console.log("\n1️⃣  Terminal Monitoring (shell hook):");
         console.log("   Add this line to your ~/.zshrc:\n");
@@ -426,11 +541,13 @@ program
         console.log("   This watches file changes from ANY editor.\n");
 
         console.log("─".repeat(40));
-        console.log("Commands:");
+        console.log("Config file: " + configFile);
+        console.log("\nCommands:");
+        console.log("   ai init            # Setup API keys");
         console.log("   ai-monitor on/off  # Toggle terminal monitoring");
         console.log("   ai watch [path]    # Start file watcher");
         console.log("   ai status          # Show current context");
-        console.log("   ask \"question\"     # Quick shortcut\n");
+        console.log('   ai ask "question"  # Ask the AI\n');
     });
 
 program.parse(process.argv);
