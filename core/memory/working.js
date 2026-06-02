@@ -36,11 +36,13 @@ function load() {
 }
 
 /**
- * Save working memory
+ * Save working memory (atomic write to avoid corruption on crash)
  */
 function save(data) {
     ensureFile();
-    fs.writeFileSync(WORKING_FILE, JSON.stringify(data, null, 2));
+    const tmp = WORKING_FILE + ".tmp";
+    fs.writeFileSync(tmp, JSON.stringify(data, null, 2));
+    fs.renameSync(tmp, WORKING_FILE);
 }
 
 /**

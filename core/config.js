@@ -46,6 +46,7 @@ function get(key) {
         "openai.apiKey": "OPENAI_API_KEY",
         "gemini.apiKey": "GEMINI_API_KEY",
         "supermemory.apiKey": "SUPERMEMORY_API_KEY",
+        "github.token": "GITHUB_TOKEN",
     };
 
     if (envMappings[key] && process.env[envMappings[key]]) {

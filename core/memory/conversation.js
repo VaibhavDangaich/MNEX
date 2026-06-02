@@ -40,11 +40,13 @@ function load() {
 }
 
 /**
- * Save conversations
+ * Save conversations (atomic write to avoid corruption on crash)
  */
 function save(data) {
     ensureFile();
-    fs.writeFileSync(CONVERSATION_FILE, JSON.stringify(data, null, 2));
+    const tmp = CONVERSATION_FILE + ".tmp";
+    fs.writeFileSync(tmp, JSON.stringify(data, null, 2));
+    fs.renameSync(tmp, CONVERSATION_FILE);
 }
 
 /**
@@ -71,6 +73,12 @@ async function addTurn(project, question, answer) {
     data.conversations = data.conversations.slice(0, MAX_CONVERSATIONS);
 
     save(data);
+
+    // Mirror into causal graph for structured recall (non-blocking)
+    try {
+        const causal = require("./causal");
+        causal.recordConversation({ project, question, answer });
+    } catch (e) { /* ignore */ }
 
     // Sync to Supermemory for cross-device access (async, non-blocking)
     syncToCloud(project, question, answer).catch(() => {

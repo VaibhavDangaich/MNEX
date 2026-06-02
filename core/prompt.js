@@ -135,6 +135,18 @@ function buildSemanticSection(memory) {
 }
 
 /**
+ * Build cross-project intelligence section
+ * @param {Object} memory - Memory with crossProject context
+ * @returns {string} Formatted cross-project section
+ */
+function buildCrossProjectSection(memory) {
+    if (!memory || !memory.crossProject) {
+        return "";
+    }
+    return memory.crossProject;
+}
+
+/**
  * Build conversation history section
  * @param {string} projectName - Current project
  * @returns {string} Formatted conversation history
@@ -152,6 +164,8 @@ function buildConversationSection(projectName) {
  */
 function buildPromptValues(question, context, memory) {
     const projectName = context.isGitRepo ? context.repoName : "Unknown";
+    const crossProjectSection = buildCrossProjectSection(memory);
+    
     return {
         projectName,
         branch: context.isGitRepo ? context.branch : "N/A",
@@ -160,7 +174,7 @@ function buildPromptValues(question, context, memory) {
         workingSection: buildWorkingSection(memory),
         episodicSection: buildEpisodicSection(memory),
         memorySection: buildMemorySection(memory),
-        semanticSection: buildSemanticSection(memory),
+        semanticSection: buildSemanticSection(memory) + (crossProjectSection ? "\n\n" + crossProjectSection : ""),
         conversationSection: buildConversationSection(projectName),
         question,
     };

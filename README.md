@@ -1,535 +1,435 @@
-# 🤖 AI CLI Agent
+# mnex
 
-> **A persistent personal context agent that remembers everything you do across your entire machine.**
+<div align="center">
 
-The AI CLI Agent is your digital cognitive layer — it continuously monitors your terminal commands, file edits, and git changes, building a semantic memory of your work. Ask questions naturally without explaining context; the agent already knows what you've been working on.
+**A cognitive-architecture-inspired AI coding agent that lives in your terminal.**
+
+[![npm version](https://img.shields.io/npm/v/@vaibhav_dangaich/mnex.svg)](https://www.npmjs.com/package/@vaibhav_dangaich/mnex)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Node >=18](https://img.shields.io/badge/node-%3E%3D18-blue.svg)](#)
+
+*Persistent multi-layer memory · stateful LangGraph agent · causal work graph · local-first routing · GitHub integration · eval harness · plugin SDK*
+
+</div>
 
 ---
 
-## ✨ Vision
+## Why this exists
 
-Imagine never having to explain "I was working on that React component earlier" or "remember that API error I fixed yesterday?" This agent watches your work silently, builds understanding, and answers questions with full context of your recent activity.
+Most "AI coding assistants" are stateless Q&A wrappers. Every conversation starts from zero. They don't know what you were doing five minutes ago, they can't tell you *why* you last touched a file, and they don't learn from the suggestions you've rejected.
+
+This project treats the agent as a **cognitive system**, not a chatbot:
+
+- A **multi-tier memory** architecture (episodic → working → semantic → causal) that mirrors how humans actually reason.
+- A **stateful LangGraph agent** with a planner → executor → critic loop, so the agent can *decide to fetch more context* before answering.
+- A **causal work graph** in SQLite: every edit, command, commit, and conversation is a node; edges capture `preceded_by`, `caused_by`, `resolved`.
+- A **local-first router** that uses Ollama / pure memory lookups for cheap queries and only escalates to the cloud when needed.
+- A **preference learning loop** (DPO-exportable) that adapts to *your* feedback on suggestions.
+- An **evaluation harness** with baseline diffs, so prompt changes don't silently regress.
+- An **observability layer** (SQLite-backed telemetry of every LLM call: tokens, cost, latency, route).
+- A **plugin SDK** — drop `~/.mnex/plugins/*.js` and register tools, memory sources, and lifecycle hooks.
+
+---
+
+## Architecture
+
+```
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                              mnex                                    │
+├──────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│   ┌─────────────────┐      ┌──────────────────────┐     ┌────────────────┐   │
+│   │  Ambient Sensors│      │  LangGraph Agent     │     │  Observability │   │
+│   │                 │      │                      │     │                │   │
+│   │  • shell hook   │ ───▶ │  recall  ─► planner  │ ──▶ │  obs/telemetry │   │
+│   │  • filewatcher  │      │                │     │     │  (SQLite WAL)  │   │
+│   │  • focus state  │      │                ▼     │     └────────────────┘   │
+│   │                 │      │           executor   │                          │
+│   └────────┬────────┘      │                │     │     ┌────────────────┐   │
+│            │               │                ▼     │     │ Preference log │   │
+│            ▼               │            synthesiz │ ◀── │ (few-shot /    │   │
+│   ┌─────────────────┐      │                │     │     │  DPO export)   │   │
+│   │   Memory Tiers  │      │                ▼     │     └────────────────┘   │
+│   │                 │ ◀──  │             critic   │                          │
+│   │ episodic  (3h)  │      │             │   ▲    │     ┌────────────────┐   │
+│   │ working (sess.) │      │             ▼   │    │     │ Plugin SDK     │   │
+│   │ local   (proj.) │      │          (loop back) │ ◀── │ ~/.mnex/       │   │
+│   │ semantic(cloud) │      └──────────────────────┘     │   plugins/*.js │   │
+│   │ causal  (graph) │                                   └────────────────┘   │
+│   └─────────────────┘                                                        │
+│                                                                              │
+│   ┌──────────────────────────────────────────────────────────────────────┐   │
+│   │  Router:  trivial → memory-only  ·  simple → Ollama  ·  complex → cloud  │
+│   └──────────────────────────────────────────────────────────────────────┘   │
+└──────────────────────────────────────────────────────────────────────────────┘
+```
+
+### The LangGraph agent (critic loop)
+
+```mermaid
+flowchart LR
+    START((start)) --> R[recall<br/><sub>load memory tiers</sub>]
+    R --> P[planner<br/><sub>pick tools or finish</sub>]
+    P -- tool_calls --> E[executor<br/><sub>read_file · grep · git_log ·<br/>query_memory · plugin tools</sub>]
+    E --> P
+    P -- done --> S[synthesizer<br/><sub>produce draft answer</sub>]
+    S --> C[critic<br/><sub>score 1-10</sub>]
+    C -- score ≥ 7 --> END((end))
+    C -- score < 7<br/>& iter < 3 --> P
+    C -- iter = 3 --> END
+```
+
+Nodes live in [`core/agent/graph.js`](core/agent/graph.js). The planner and critic are themselves LLM calls, but are tracked in observability as distinct `node` tags (`agent.planner`, `agent.critic`, `agent.synthesizer`) so you can see per-node latency and cost.
+
+### Multi-agent review (parallel fan-out)
+
+```mermaid
+flowchart LR
+    D[fetch_diff] --> R[reviewer<br/><sub>bugs · security</sub>]
+    D --> T[tester<br/><sub>coverage · edges</sub>]
+    D --> DS[docsmith<br/><sub>doc drift</sub>]
+    R --> M[merge]
+    T --> M
+    DS --> M
+```
+
+Three specialists run in parallel against `git diff HEAD` (or any ref) via `mnex review`. Implemented in [`core/agent/review.js`](core/agent/review.js).
+
+### Causal work graph
+
+Flat event logs can't answer *"why did I touch `auth.js` last Tuesday?"*. The causal graph promotes the event stream into a typed graph:
+
+```
+(commit "fix login")
+      │ includes
+      ▼
+(edit auth.js save)  ──preceded_by──►  (cmd "npm test")  ──preceded_by──►  (error "exit 1")
+      ▲
+      │ referenced_in
+(conversation "why is auth failing")
+```
+
+Schema (SQLite + FTS5), ingestion hooks, and a natural-language → SQL query layer live in [`core/memory/causal.js`](core/memory/causal.js).
+
+---
+
+## Install
 
 ```bash
-# From ANY directory on your machine
-$ ai ask "what was I working on today?"
+npm install -g @vaibhav_dangaich/mnex
+mnex init                       # one-time: paste your OpenAI / Gemini key
+mnex service start              # install shell hook, filewatcher, watcher daemon
+```
 
-🤖 AI Agent
-────────────────────────────────────────
-📍 Directory: tmp (not a project)
-⚡ Recent: 12 command(s)
-💾 Memory: 5 item(s)
-────────────────────────────────────────
+Environment variables (alternatively edit `config/default.json`):
 
-💬 Response:
-You were working on the cli_agent project today. Specifically:
-- Updated the memory module to add global context tracking
-- Fixed the git diff capture in gitmonitor.js
-- Modified prompt.js to include code changes in AI responses
-- Ran several test commands from /tmp to verify cross-project awareness
+```bash
+# one of the two
+OPENAI_API_KEY=sk-...
+GEMINI_API_KEY=...
+
+# optional: cross-device semantic recall
+SUPERMEMORY_API_KEY=...
+
+# optional: local model routing
+OLLAMA_URL=http://localhost:11434
+OLLAMA_MODEL=llama3.2:3b
 ```
 
 ---
 
-## 🚀 Features
+## Command reference
 
-### 🧠 Three-Layer Memory System
+### Core conversation
 
-| Layer | Purpose | Retention |
+| Command | What it does |
+|---|---|
+| `mnex ask "question"` | Default path — router picks memory / Ollama / cloud. |
+| `mnex ask "..." --agent` | Use the LangGraph agent with critic loop. |
+| `mnex ask "..." --agent --trace` | Same, but print the per-node execution trace. |
+| `mnex ask "..." --route memory\|ollama\|cloud` | Force a route. |
+
+### Work graph
+
+| Command | What it does |
+|---|---|
+| `mnex graph stats` | Node/edge counts, broken down by type and relation. |
+| `mnex graph search "<text>"` | FTS5 search across commits, edits, commands, conversations. |
+| `mnex graph ask "<nl>"` | Natural-language → SQL query (read-only, sanitised). |
+
+### Developer DNA
+
+| Command | What it does |
+|---|---|
+| `mnex profile` | Markdown profile: languages, top commands, error patterns, productive hours, co-edited file pairs, frequent topics. |
+| `mnex profile --json` | Same data, machine-readable. |
+
+### Multi-agent review
+
+| Command | What it does |
+|---|---|
+| `mnex review` | Three agents (reviewer, tester, docsmith) fan-out over `git diff HEAD`. |
+| `mnex review -t main` | Diff against a specific ref. |
+
+### GitHub integration
+
+| Command | What it does |
+|---|---|
+| `mnex github` | Show GitHub integration status and help. |
+| `mnex github --repos` | List your repositories (requires `GITHUB_TOKEN`). |
+| `mnex github --index` | Index all repos into Supermemory for semantic recall. |
+| `mnex github --repo user/repo` | Index a specific repository. |
+| `mnex github --index --max 20` | Index up to N repos. |
+| `mnex github --index --starred` | Include starred repos in the index. |
+
+Set `GITHUB_TOKEN` in your `.env` or `~/.mnex.env`. Generate one at `github.com/settings/tokens/new` (read-only scopes are sufficient).
+
+### Evals
+
+| Command | What it does |
+|---|---|
+| `mnex eval run` | Run the suite, diff against baseline, print pass/fail + latency + critic scores. |
+| `mnex eval run --baseline` | Run and immediately save as the new baseline. |
+| `mnex eval baseline` | Re-run and save without diffing. |
+| `mnex eval add "question" --contains "keyword"` | Add a case. |
+
+### Preference learning
+
+| Command | What it does |
+|---|---|
+| `mnex suggest feedback <id> accept\|reject [reason]` | Rate the last agent answer (id printed after each `--agent` run). |
+| `mnex suggest stats` | Accept/reject counts, DPO pair count. |
+| `mnex suggest export` | Stream DPO-compatible JSONL (`{prompt, chosen, rejected}`) to stdout. |
+
+### Observability
+
+| Command | What it does |
+|---|---|
+| `mnex stats` | 7-day totals: calls, tokens, cost, latency, by route/model/day. |
+| `mnex stats --days 30 --project myproj` | Window + project filter. |
+| `mnex stats --recent 20` | Last N LLM calls. |
+
+### Plugins
+
+| Command | What it does |
+|---|---|
+| `mnex plugin list` | Show loaded plugins and what they register. |
+| `mnex plugin scaffold <name>` | Create `~/.mnex/plugins/<name>.js` from a template. |
+
+### Legacy / ambient
+
+`mnex log`, `mnex remember`, `mnex task`, `mnex memory`, `mnex status`, `mnex history`, `mnex watch`, `mnex errors`, `mnex focus`, `mnex sync`, `mnex handoff`, `mnex service`, `mnex journal`, `mnex projects`, `mnex error`, `mnex decide`, `mnex learned`, `mnex snippet`, `mnex remind`, `mnex knowledge`, `mnex github`, `mnex supermemory`, `mnex init`, `mnex setup` — see `mnex --help`.
+
+---
+
+## Memory tiers in detail
+
+| Tier | Store | TTL | Role |
+|------|-------|-----|------|
+| **Episodic** | `storage/episodic.json` | 3 hours | Raw stream of terminal commands and file edits. Cheap to query, fast to decay. |
+| **Working** | `storage/working.json` | Session | Current task, recent errors, blockers, decisions — per project. |
+| **Local semantic** | `storage/memory.json` | Permanent | Facts the user explicitly asked to remember (`mnex remember "..."`). |
+| **Cloud semantic** | Supermemory | Permanent, cross-device | Vectorised memories for cross-device + cross-project recall. |
+| **Causal graph** | `storage/causal.db` (SQLite WAL) | Permanent | Typed nodes + edges — the structural history of your work. |
+| **Telemetry** | `storage/telemetry.db` | Permanent | Every LLM call (provider, model, tokens, cost, latency, node). |
+| **Preferences** | `storage/preferences.json` | Permanent | Accept/reject history, few-shot injected into the planner. |
+
+All JSON writes are **atomic** (write-to-temp-then-rename) to survive crashes mid-write.
+
+---
+
+## Local-first routing
+
+Every `mnex ask` starts with a heuristic classifier:
+
+| Class | Signals | Routes to |
 |-------|---------|-----------|
-| **Episodic** | Recent activity (commands, file edits) | 3 hours |
-| **Working** | Current session context (tasks, blockers) | Session |
-| **Semantic** | Long-term facts + Supermemory cloud | Permanent |
+| **trivial** | "what did I", "list", "recent", "today" — and episodic memory has entries | Pure memory lookup (zero LLM cost). |
+| **simple** | Short, single clause, no "implement/design/refactor" | Ollama (if running), else cloud. |
+| **complex** | Contains `implement`, `design`, `refactor`, `algorithm`, `debug`, `review`… | Cloud. |
 
-### 🌍 Global Context Awareness
-
-The agent knows what you're doing across **ALL** your projects, not just the current directory. Ask from `/tmp` and it still knows you were editing `cli_agent/core/prompt.js`.
-
-### 📝 Real Code Change Tracking
-
-See **exact git diffs** in responses. When you ask "what changed?", the AI shows actual code modifications:
-
-```diff
-+ function buildGitSection(context) {
-+     if (!context.isGitRepo) return "";
-+     return gitmonitor.formatForPrompt(context.cwd);
-+ }
-```
-
-### 👁️ Editor-Agnostic File Monitoring
-
-Works with **any editor** — VS Code, Vim, Emacs, Sublime, IntelliJ. Uses file system watching, not editor plugins.
-
-### 🔌 Supermemory Integration
-
-Optionally sync to [Supermemory](https://supermemory.ai) for semantic search across your entire work history.
+Override with `--route memory|ollama|cloud`. Classifier code: [`core/llm/router.js`](core/llm/router.js).
 
 ---
 
-## 📦 Installation
+## Plugin SDK
 
-### Prerequisites
+Drop a file into `~/.mnex/plugins/<name>.js`:
 
-- Node.js 18+ 
-- Git (recommended for best experience)
-- OpenAI or Gemini API key
+```js
+module.exports = {
+    name: "jira",
+    version: "1.0.0",
 
-### Install
+    // Agent-callable tools — namespaced as "jira.fetch_ticket"
+    tools: {
+        fetch_ticket: {
+            description: "Fetch a Jira ticket. Args: { id: string }",
+            async run({ id }) {
+                const r = await fetch(`https://mycompany.atlassian.net/rest/api/3/issue/${id}`);
+                const j = await r.json();
+                return { ok: true, result: `${j.key}: ${j.fields.summary}` };
+            },
+        },
+    },
 
-```bash
-# Clone the repository
-git clone https://github.com/VaibhavDangaich/cli_agent.git
-cd cli_agent
+    // Inject extra context into every `memory.recall(...)` call
+    memorySource: async (project, query) => {
+        if (!/PROJ-\d+/.test(query)) return null;
+        return "Relevant Jira tickets: …";
+    },
 
-# Install dependencies
-npm install
-
-# Link globally
-npm link
+    // Lifecycle hooks
+    hooks: {
+        onStart(ctx)    { /* ... */ },
+        onQuestion(q)   { /* ... */ },
+        onCommand(evt)  { /* ... */ },
+    },
+};
 ```
 
-### Post-Install Notice
-
-```
-⚠️  RECOMMENDED: Initialize git in your project folders!
-
-The AI agent works best when your projects are git-initialized:
-✓ Track your code changes with precise diffs
-✓ Know exactly what you modified in each file  
-✓ Answer "what did I change?" with actual code
-```
+Scaffold one: `mnex plugin scaffold jira`.
 
 ---
 
-## ⚙️ Configuration
+## Eval harness
 
-### 1. Create `.env` File
-
-```bash
-cp .env.example .env
-```
-
-Edit `.env` with your API keys:
-
-```env
-# Required: Choose one LLM provider
-OPENAI_API_KEY=sk-proj-your-openai-key-here
-# OR
-GEMINI_API_KEY=your-gemini-key-here
-
-# Optional: Supermemory for semantic search
-SUPERMEMORY_API_KEY=sm_your-supermemory-key-here
-```
-
-### 2. Enable Terminal Monitoring (Recommended)
-
-Add to your `~/.zshrc`:
-
-```bash
-source /path/to/cli_agent/hooks/zsh-hook.sh
-```
-
-Then reload:
-
-```bash
-source ~/.zshrc
-ai-monitor on  # Enable monitoring
-```
-
-### 3. Start File Watcher (Optional)
-
-Monitor file changes from any editor:
-
-```bash
-ai watch ~/code  # Watch your code directory
-```
-
----
-
-## 📖 Usage
-
-### Core Commands
-
-#### `ai ask "question"`
-
-Ask the AI anything. It has full context of your recent work.
-
-```bash
-ai ask "what was I working on?"
-ai ask "what error did I encounter earlier?"
-ai ask "summarize my changes today"
-ai ask "what files did I modify in the auth module?"
-```
-
-Options:
-- `-d, --debug` — Show the full prompt being sent to the LLM
-
-#### `ai remember "fact"`
-
-Store important information for long-term recall.
-
-```bash
-ai remember "the production API is at api.example.com"
-ai remember "use snake_case for database columns"
-ai remember "auth tokens expire after 24 hours"
-```
-
-#### `ai task "description"`
-
-Set your current task for better context.
-
-```bash
-ai task "implementing user authentication"
-ai task "fixing the payment bug in checkout"
-ai task done  # Clear current task
-```
-
-### Monitoring Commands
-
-#### `ai watch [path]`
-
-Start file watcher for editor-agnostic monitoring.
-
-```bash
-ai watch .           # Watch current directory
-ai watch ~/projects  # Watch all projects
-```
-
-#### `ai-monitor on|off`
-
-Toggle terminal command monitoring (requires shell hook).
-
-```bash
-ai-monitor on   # Start capturing commands
-ai-monitor off  # Stop capturing
-```
-
-#### `ai log "command" --cwd /path`
-
-Manually log a command (used internally by shell hook).
-
-```bash
-ai log "npm test" --cwd /Users/me/project --exit 0
-```
-
-### Information Commands
-
-#### `ai status`
-
-Show current context and monitoring state.
-
-```bash
-$ ai status
-
-📊 AI Agent Status
-────────────────────────────────────────
-📁 Project: cli_agent
-🌿 Branch: master
-🧠 Memory: 5 items stored
-⏱️  Episodic: 12 recent events
-👁️  File watcher: Running
-🖥️  Terminal monitor: Enabled
-```
-
-#### `ai history`
-
-Show recent command history from episodic memory.
-
-```bash
-$ ai history
-
-Recent Activity:
-────────────────────────────────────────
-[✓] git commit -m "add memory layer"
-[✓] npm test
-[✗] node broken-script.js
-[✓] ai ask "what went wrong?"
-```
-
-#### `ai memory`
-
-Display stored memories for current project.
-
-```bash
-$ ai memory
-
-💾 Stored Memories (cli_agent):
-────────────────────────────────────────
-1. The API key is stored in .env
-2. Use CommonJS modules, not ESM
-3. Supermemory SDK uses client.add()
-```
-
-### Setup & Debug Commands
-
-#### `ai setup`
-
-Show setup instructions for shell hook and file watcher.
-
-#### `ai supermemory`
-
-Debug Supermemory connection and test storage.
-
-```bash
-ai supermemory --store "test memory"   # Store a test memory
-ai supermemory --query "test"          # Search memories
-ai supermemory --list                  # List all memories
-```
-
----
-
-## 🏗️ Architecture
-
-```
-cli_agent/
-├── bin/
-│   └── ai.js              # CLI entry point (Commander.js)
-│
-├── core/
-│   ├── config.js          # Configuration manager
-│   ├── context.js         # Git & project detection
-│   ├── llm.js             # LLM calls (OpenAI/Gemini)
-│   ├── prompt.js          # LangChain prompt templates
-│   │
-│   ├── memory/
-│   │   ├── index.js       # Unified memory interface
-│   │   ├── episodic.js    # Short-term activity (3hr)
-│   │   ├── working.js     # Session context
-│   │   ├── local.js       # Local JSON storage
-│   │   └── supermemory.js # Supermemory SDK integration
-│   │
-│   └── monitor/
-│       ├── terminal.js    # Terminal event processor
-│       ├── filewatcher.js # Chokidar file watcher
-│       ├── gitmonitor.js  # Git diff capture
-│       └── extractor.js   # LLM-based context extraction
-│
-├── hooks/
-│   └── zsh-hook.sh        # Shell hook for terminal monitoring
-│
-├── storage/
-│   ├── memory.json        # Long-term memories
-│   ├── episodic.json      # Recent activity
-│   └── working.json       # Session context
-│
-└── config/
-    └── default.json       # Default configuration
-```
-
----
-
-## 🧠 How Memory Works
-
-### The Three Layers
-
-#### 1. Episodic Memory (Short-Term)
-
-Stores raw activity events for the last 3 hours:
-- Terminal commands with exit codes
-- File create/save/delete events
-- Git commits with diffs
+Cases live in [`core/eval/cases.json`](core/eval/cases.json). Each case supports:
 
 ```json
 {
-  "type": "terminal",
-  "command": "npm test",
-  "exitCode": 0,
-  "project": "cli_agent",
-  "timestamp": "2026-02-01T10:30:00Z"
-}
-```
-
-#### 2. Working Memory (Session)
-
-Tracks current session context:
-- Current task description
-- Recent blockers/errors
-- Key decisions made
-
-```json
-{
-  "currentTask": "implementing auth",
-  "blockers": ["OAuth callback not working"],
-  "lastActivity": "2026-02-01T10:30:00Z"
-}
-```
-
-#### 3. Semantic Memory (Long-Term)
-
-Permanent storage for important facts:
-- **Local**: JSON file for quick recall
-- **Supermemory**: Cloud semantic search
-
-```json
-{
-  "cli_agent": [
-    "Use CommonJS modules",
-    "API key stored in .env",
-    "Supermemory SDK: client.add()"
-  ]
-}
-```
-
-### Global Context
-
-When you ask a question, the agent gathers context from:
-
-1. **Current project** — Episodic + Working + Local memory
-2. **All recent projects** — Global activity feed
-3. **Git state** — Uncommitted changes + recent commits
-4. **Semantic search** — Supermemory query results
-
-This means asking from `/tmp` still shows your `cli_agent` work!
-
----
-
-## 🔧 Project Detection
-
-The agent distinguishes real projects from random directories:
-
-**Recognized as projects:**
-- Git repositories (`.git/`)
-- Node.js projects (`package.json`)
-- Rust projects (`Cargo.toml`)
-- Python projects (`pyproject.toml`, `requirements.txt`, `setup.py`)
-- Go projects (`go.mod`)
-- Java/Kotlin (`pom.xml`, `build.gradle`)
-- C/C++ (`CMakeLists.txt`, `Makefile`)
-
-**Ignored directories:**
-- `/tmp`, `/var`, `/etc`, `/usr`
-- Home directory root
-- System paths
-
----
-
-## 🔐 Privacy & Data
-
-### Local Storage
-
-All memory is stored locally in `./storage/`:
-- `memory.json` — Long-term facts
-- `episodic.json` — Recent activity (auto-expires)
-- `working.json` — Session context
-
-### Supermemory (Optional)
-
-If configured, memories are synced to Supermemory for:
-- Semantic search across all your work
-- Persistent cloud backup
-- Cross-device access
-
-**Your API key is never stored in memory or sent to the LLM.**
-
----
-
-## 🛠️ Customization
-
-### Configuration File
-
-Edit `config/default.json`:
-
-```json
-{
-  "llm": {
-    "provider": "openai",
-    "model": "gpt-4o-mini",
-    "temperature": 0.7
-  },
-  "monitor": {
-    "enabled": true,
-    "ignorePatterns": ["node_modules", ".git"]
-  },
-  "memory": {
-    "episodicMaxAge": 3,
-    "episodicMaxEvents": 100
+  "id": "tool-use-1",
+  "question": "How many commits are in this repo?",
+  "expect": {
+    "contains_any":    ["commit"],
+    "contains_all":    ["main"],
+    "contains_any_ci": ["refuse", "won't"],
+    "tool_called_any": ["git_log", "grep"],
+    "min_length":      20,
+    "max_latency_ms":  15000
   }
 }
 ```
 
-### Environment Variables
+Each run records: pass/fail, failure reasons, tools invoked, latency, critic score, iterations. Baseline diff surfaces regressions (changed verdict, or >50% latency growth).
 
-| Variable | Description |
-|----------|-------------|
-| `OPENAI_API_KEY` | OpenAI API key |
-| `GEMINI_API_KEY` | Google Gemini API key |
-| `SUPERMEMORY_API_KEY` | Supermemory API key |
-| `AI_DEBUG` | Enable debug logging |
+```
+$ mnex eval run
+• self-1 … PASS  (2180ms, crit=9)
+• self-2 … PASS  (2954ms, crit=8)
+• recall-1 … PASS  (1711ms, crit=7)
+• tool-use-1 … PASS  (4402ms, crit=10)
+• refusal-1 … PASS  (1203ms, crit=9)
 
----
-
-## 🐛 Troubleshooting
-
-### "AI doesn't know what I was working on"
-
-1. **Check terminal monitoring:**
-   ```bash
-   ai-monitor status
-   ```
-
-2. **Verify shell hook is sourced:**
-   ```bash
-   grep "zsh-hook" ~/.zshrc
-   ```
-
-3. **Check episodic memory:**
-   ```bash
-   cat storage/episodic.json
-   ```
-
-### "Supermemory not storing memories"
-
-1. **Verify API key:**
-   ```bash
-   ai supermemory
-   ```
-
-2. **Test manually:**
-   ```bash
-   ai supermemory --store "test"
-   ```
-
-### "Git diffs not showing"
-
-1. **Ensure you're in a git repo:**
-   ```bash
-   git status
-   ```
-
-2. **Check for uncommitted changes:**
-   ```bash
-   git diff
-   ```
+═══ Eval report ═══
+Passed: 5/5   Failed: 0
+Avg latency: 2490ms   Avg critic: 8.60
+(no changes vs baseline)
+```
 
 ---
 
-## 🤝 Contributing
+## Observability
 
-Contributions welcome! Please:
+Every LLM call — planner, critic, synthesizer, ask, stream, review-reviewer, graph.nl2sql — is stamped with a `node` tag and recorded:
 
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Run tests
-5. Submit a pull request
+```
+$ mnex stats --days 7
+
+═══ LLM telemetry (last 7d) ═══
+Calls:       142
+Tokens:      389,412
+Cost:        $0.3241
+Avg latency: 1,820ms
+Failures:    3
+
+By route:
+  cloud-direct    68 calls   $0.2019
+  cloud-stream    42 calls   $0.1102
+  agent           18 calls   $0.0120
+  local           14 calls   $0.0000
+
+By model:
+  gpt-4o-mini     110 calls  $0.2431
+  ollama          14  calls  $0.0000
+  gemini-1.5-flash 18 calls  $0.0810
+```
+
+Records live in `storage/telemetry.db`. Pricing table is in [`core/obs/tracker.js`](core/obs/tracker.js) — update as providers change rates.
 
 ---
 
-## 📄 License
+## Project layout
 
-ISC License — see [LICENSE](LICENSE) for details.
+```
+cli_agent/
+├── bin/ai.js                   # CLI entry, command wiring
+├── core/
+│   ├── agent/
+│   │   ├── graph.js            # LangGraph agent with critic loop (flagship)
+│   │   ├── review.js           # Multi-agent code review (parallel fan-out)
+│   │   ├── tools.js            # Agent-callable tools (read_file, grep, git_log, ...)
+│   │   ├── profile.js          # Developer DNA / digital twin
+│   │   ├── preferences.js      # Accept/reject → few-shot + DPO export
+│   │   ├── proactive.js        # Spidey-sense file watcher
+│   │   ├── journal.js, knowledge.js, reminders.js, crossproject.js
+│   ├── memory/
+│   │   ├── index.js            # Unified recall() — all tiers
+│   │   ├── episodic.js         # Recent activity (JSON, atomic writes)
+│   │   ├── working.js          # Session state (JSON, atomic writes)
+│   │   ├── local.js            # Semantic facts (JSON, atomic writes)
+│   │   ├── supermemory.js      # Cloud semantic search
+│   │   ├── conversation.js     # Multi-turn context (JSON, atomic writes)
+│   │   └── causal.js           # Causal work graph (SQLite + FTS5 + NL→SQL)
+│   ├── integrations/
+│   │   └── github.js           # GitHub REST API — index repos/issues/PRs into memory
+│   ├── remote/
+│   │   ├── queue.js            # Outbound sync queue for multi-device relay
+│   │   └── listener.js         # Inbound event listener for cross-device sync
+│   ├── monitor/                # filewatcher, terminal hook, extractor, gitmonitor
+│   ├── llm.js                  # LangChain provider wrapper (OpenAI / Gemini)
+│   ├── llm/router.js           # Local-first router (trivial → Ollama → cloud)
+│   ├── obs/tracker.js          # Telemetry (SQLite WAL)
+│   ├── plugins/loader.js       # Plugin discovery & tool/memory/hook registry
+│   ├── eval/
+│   │   ├── cases.json          # Golden (question, expectation) suite
+│   │   ├── runner.js           # Asserter + baseline diff
+│   │   └── baseline.json       # (generated) snapshot of last baseline run
+│   ├── service/manager.js      # launchd integration
+│   ├── config.js, context.js, prompt.js
+├── storage/                    # All runtime state (episodic, working, causal.db, telemetry.db, ...)
+├── hooks/                      # Shell hook (zsh)
+├── scripts/                    # Postinstall
+├── vscode-extension/           # Companion VS Code extension
+└── web/                        # Optional dashboard scaffold
+```
 
 ---
 
-## 🙏 Acknowledgments
+## Security
 
-- [LangChain](https://langchain.com) — Prompt templates and LLM abstraction
-- [Supermemory](https://supermemory.ai) — Semantic memory cloud
-- [Commander.js](https://github.com/tj/commander.js) — CLI framework
-- [Chokidar](https://github.com/paulmillr/chokidar) — File system watcher
+- **Atomic writes** everywhere — no partial-write corruption.
+- **`spawn`-only** for subprocesses, never `exec` with string interpolation. File paths, patterns, and notification text are passed as argv, so there's no shell injection surface.
+- **Read-only SQL** — the NL→SQL graph query layer only allows `SELECT`, and rejects `INSERT/UPDATE/DELETE/DROP/ATTACH/PRAGMA/ALTER/CREATE`.
+- **API keys** read from `.env` or `~/.mnex.env` (user-scoped). Never logged to telemetry.
+- **Plugin tools** can be sandboxed by simply not installing plugins you don't trust — they live in `~/.mnex/plugins/` and are loaded explicitly.
 
 ---
 
-<p align="center">
-  <b>Built with 🧠 by developers who forget what they were working on</b>
-</p>
+## Roadmap / what's next
+
+The architecture leaves obvious next moves:
+
+- **DPO fine-tune** a small local model using `mnex suggest export` pairs.
+- **Embeddings over files** — semantic code search as an agent tool (beyond FTS5).
+- **Team-shared memory** — the causal graph plus Supermemory already supports cross-device, but a shared "team tribal knowledge" layer is one auth hop away.
+- **Dashboard UI** — `web/` has a Vercel scaffold; wire `mnex stats` and `mnex profile` JSON endpoints.
+- **Incident replay** — given an episodic window, re-run it against the agent as a deterministic test.
+
+---
+
+## License
+
+MIT — see [LICENSE](LICENSE).
+
+Built by [@VaibhavDangaich](https://github.com/VaibhavDangaich).

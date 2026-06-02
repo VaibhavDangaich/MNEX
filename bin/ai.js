@@ -11,14 +11,14 @@ const os = require("os");
 
 // Load environment variables from multiple locations (priority order):
 // 1. Current working directory .env
-// 2. Home directory ~/.ai-agent.env
-// 3. Home directory ~/.config/ai-agent/.env
+// 2. Home directory ~/.mnex.env
+// 3. Home directory ~/.config/mnex/.env
 // 4. Package directory .env (fallback for development)
 
 const envPaths = [
     path.join(process.cwd(), ".env"),
-    path.join(os.homedir(), ".ai-agent.env"),
-    path.join(os.homedir(), ".config", "ai-agent", ".env"),
+    path.join(os.homedir(), ".mnex.env"),
+    path.join(os.homedir(), ".config", "mnex", ".env"),
     path.join(__dirname, "../.env"),
 ];
 
@@ -47,9 +47,9 @@ const terminal = require("../core/monitor/terminal");
 const program = new Command();
 
 program
-    .name("ai")
-    .description("Context-aware AI agent with memory")
-    .version("1.0.0");
+    .name("mnex")
+    .description("mnex — cognitive-architecture AI coding agent with persistent memory")
+    .version("1.5.0");
 
 /**
  * Helper to get project name (returns null if not in a real project)
@@ -74,12 +74,15 @@ program
     .command("ask <question>")
     .description("Ask the AI agent a question")
     .option("-d, --debug", "Show the full prompt being sent")
+    .option("--agent", "Use the LangGraph agent (recall → plan → execute → critic)")
+    .option("--trace", "Print the agent execution trace (implies --agent)")
+    .option("--route <mode>", "Force routing: memory | ollama | cloud")
     .action(async (question, options) => {
         const cwd = process.cwd();
         const gitContext = getGitContext(cwd);
         const projectName = getProjectName();
 
-        console.log("\n🤖 AI Agent");
+        console.log("\n🧠 mnex");
         console.log("─".repeat(40));
 
         // Show context - differentiate between project and random directory
@@ -95,6 +98,27 @@ program
         // Get full memory (all 3 layers)
         const recalled = await memory.recall(projectName, question);
         
+        // Get cross-project intelligence if available
+        let crossProjectContext = null;
+        try {
+            const crossproject = require("../core/agent/crossproject");
+            const configModule = require("../core/config");
+            const supermemoryKey = configModule.get("supermemory.apiKey");
+            if (supermemoryKey) {
+                crossProjectContext = await crossproject.getCrossProjectContext(
+                    question, 
+                    projectName, 
+                    supermemoryKey
+                );
+            }
+            // Auto-register current project
+            if (projectName) {
+                crossproject.autoRegister(cwd);
+            }
+        } catch (e) {
+            // Silently ignore cross-project errors
+        }
+        
         // Show what context we have
         if (recalled.hasActivity) {
             console.log(`⚡ Recent: ${recalled.episodic.length} command(s)`);
@@ -105,6 +129,9 @@ program
         if (recalled.hasMemory) {
             console.log(`💾 Memory: ${recalled.local.length} item(s)`);
         }
+        if (crossProjectContext) {
+            console.log(`🧠 Cross-project: Found similar work`);
+        }
 
         console.log("─".repeat(40));
 
@@ -113,20 +140,87 @@ program
             const promptDebug = await formatForDisplay(question, gitContext, recalled);
             console.log("\n[DEBUG] Full Prompt:\n");
             console.log(promptDebug);
+            if (crossProjectContext) {
+                console.log("\n[DEBUG] Cross-Project Context:\n");
+                console.log(crossProjectContext);
+            }
             console.log("\n" + "─".repeat(40));
         }
 
-        // Call LLM with LangChain prompt template
+        // Add cross-project context to recalled memories
+        if (crossProjectContext) {
+            recalled.crossProject = crossProjectContext;
+        }
+
         try {
-            console.log("\n💬 Response:\n");
+            const useAgent = options.agent || options.trace;
+            const router = require("../core/llm/router");
+            const preferences = require("../core/agent/preferences");
+
+            // ── AGENT PATH (LangGraph) ──
+            if (useAgent) {
+                console.log("\n🧠 Agent mode (recall → plan → execute → critic)\n");
+                const agent = require("../core/agent/graph");
+                const result = await agent.run({
+                    question,
+                    project: projectName,
+                    context: gitContext,
+                });
+                const answer = result.final || result.draft || "(no answer)";
+                console.log("💬 Response:\n");
+                console.log(answer);
+                console.log("");
+
+                if (options.trace) {
+                    console.log(agent.renderTrace(result));
+                }
+
+                const projName = projectName || cwd.split("/").pop();
+                await conversation.addTurn(projName, question, answer);
+                const sid = preferences.registerSuggestion({ question, answer, project: projName });
+                console.log(`\n💡 Rate this answer: mnex suggest feedback ${sid} accept|reject [reason]`);
+                return;
+            }
+
+            // ── ROUTER PATH (local-first) ──
+            const routed = await router.route(question, {
+                memory: recalled,
+                forceRoute: options.route || null,
+            });
+
+            console.log(`\n🚏 Route: ${routed.route}${routed.classification ? ` (${routed.classification})` : ""}\n`);
+
+            if (routed.route === "memory") {
+                const answer = router.answerFromMemory(question, recalled);
+                console.log(answer);
+                const projName = projectName || cwd.split("/").pop();
+                await conversation.addTurn(projName, question, answer);
+                return;
+            }
+
+            if (routed.route === "ollama") {
+                const { HumanMessage, SystemMessage } = require("@langchain/core/messages");
+                const messages = await require("../core/prompt").getMessages(question, gitContext, recalled);
+                const plain = messages.map((m) => ({
+                    role: m._getType() === "human" ? "user" : "system",
+                    content: m.content,
+                }));
+                const out = await router.ollamaChat(plain);
+                console.log("💬 Response:\n");
+                console.log(out.content);
+                const projName = projectName || cwd.split("/").pop();
+                await conversation.addTurn(projName, question, out.content);
+                return;
+            }
+
+            // ── CLOUD STREAM (default) ──
+            console.log("💬 Response:\n");
             const response = await llm.streamChat(question, gitContext, recalled, (chunk) => {
                 process.stdout.write(chunk);
             });
             console.log("\n");
-
-            // Save conversation for multi-turn context
             const projName = projectName || cwd.split("/").pop();
-            conversation.addTurn(projName, question, response);
+            await conversation.addTurn(projName, question, response);
 
         } catch (error) {
             console.error("\n❌ Error:", error.message);
@@ -265,7 +359,7 @@ program
         const gitContext = getGitContext(cwd);
         const projectName = getProjectName();
 
-        console.log("\n📊 AI Agent Status");
+        console.log("\n📊 mnex Status");
         console.log("─".repeat(40));
 
         // Project info
@@ -333,33 +427,231 @@ program
     });
 
 // ============================================
-// ai watch [path]
+// ai watch [path] - with proactive suggestions
 // ============================================
 program
     .command("watch [path]")
-    .description("Watch a directory for file changes (works with any editor)")
-    .action(async (watchPath) => {
+    .description("Watch a directory for file changes with proactive AI suggestions and error detection")
+    .option("--proactive", "Enable proactive suggestions (Spidey Sense)")
+    .option("--errors", "Enable real-time error detection with notifications")
+    .option("--service", "Run as background service (for LaunchAgent)")
+    .option("--notify", "Send macOS notifications for alerts")
+    .action(async (watchPath, options) => {
         const filewatcher = require("../core/monitor/filewatcher");
+        const proactive = require("../core/agent/proactive");
+        const serviceManager = require("../core/service/manager");
         const targetPath = watchPath || process.cwd();
+        const isService = options.service;
+        const enableNotify = options.notify || isService;
+        const enableErrors = options.errors || options.proactive; // Errors enabled with --proactive too
 
-        console.log("\n👁️  AI Agent File Watcher");
-        console.log("─".repeat(40));
-        console.log(`📁 Watching: ${targetPath}`);
-        console.log("📝 Tracking: .js, .ts, .py, .go, .rs, .md, etc.");
-        console.log("🚫 Ignoring: node_modules, .git, dist, build\n");
-        console.log("Press Ctrl+C to stop.\n");
+        if (!isService) {
+            console.log("\n👁️  mnex File Watcher");
+            console.log("─".repeat(40));
+            console.log(`📁 Watching: ${targetPath}`);
+            console.log("📝 Tracking: .js, .ts, .py, .go, .rs, .md, etc.");
+            console.log("🚫 Ignoring: node_modules, .git, dist, build");
+            if (options.proactive) {
+                console.log("🕷️  Spidey Sense: ENABLED (suggestions + errors)");
+            } else if (options.errors) {
+                console.log("🚨 Error Detection: ENABLED");
+            }
+            if (enableNotify) {
+                console.log("🔔 Notifications: ENABLED");
+            }
+            console.log("🎯 Focus: Auto-tracks currently edited file");
+            console.log("\nPress Ctrl+C to stop.\n");
+        } else {
+            // Service mode - log to file
+            console.log(`[${new Date().toISOString()}] mnex service started`);
+            console.log(`[${new Date().toISOString()}] Watching: ${targetPath}`);
+            serviceManager.notify("mnex", "File watcher started", { subtitle: "Monitoring enabled" });
+        }
+
+        // Hook into file watcher for proactive analysis and error detection
+        if (options.proactive || options.errors) {
+            filewatcher.onFileChange = async (filePath, content, changeType, meta = {}) => {
+                // Only run analysis on focused project files
+                const isFocused = meta.isFocused !== false;
+                
+                try {
+                    const result = await proactive.analyze(filePath, content, { 
+                        cwd: targetPath,
+                        isFocused,
+                        enableErrors: enableErrors,
+                    });
+                    
+                    if (!result) return;
+                    
+                    // Handle errors (real-time notifications already sent by analyze)
+                    if (result.hasErrors && result.errors && result.errors.length > 0) {
+                        if (!isService) {
+                            console.log(proactive.formatSuggestion(result));
+                        }
+                        return; // Don't show suggestions when there are errors
+                    }
+                    
+                    // Handle suggestions (only with --proactive)
+                    if (options.proactive && result.issues && result.issues.length > 0) {
+                        if (!isService) {
+                            console.log(proactive.formatSuggestion(result));
+                        }
+                        
+                        // Send notification for focused files with important issues
+                        if (enableNotify && isFocused) {
+                            const warnings = result.issues.filter(i => 
+                                i.severity === "warning" || i.severity === "help"
+                            );
+                            if (warnings.length > 0) {
+                                const fileName = path.basename(filePath);
+                                serviceManager.notify(
+                                    "🕷️ Spidey Sense", 
+                                    warnings[0].message,
+                                    { subtitle: fileName }
+                                );
+                            }
+                        }
+                    }
+                } catch (e) {
+                    if (isService) {
+                        console.error(`[${new Date().toISOString()}] Proactive error:`, e.message);
+                    }
+                }
+            };
+        }
 
         filewatcher.start(targetPath);
 
         // Keep process alive
         process.on("SIGINT", async () => {
-            console.log("\n");
+            if (!isService) console.log("\n");
             await filewatcher.stop();
+            if (isService) {
+                console.log(`[${new Date().toISOString()}] mnex service stopped`);
+            }
             process.exit(0);
         });
 
         // Prevent exit
         await new Promise(() => {});
+    });
+
+// ============================================
+// ai errors [file] - Check file for errors
+// ============================================
+program
+    .command("errors [file]")
+    .description("Check a file for syntax errors, security issues, logic bugs, and style problems")
+    .option("-a, --all", "Check all files in current directory")
+    .option("-d, --deep", "Enable AI-powered deep analysis for logic errors")
+    .option("--show-last", "Show details of last notified errors")
+    .option("--open", "Open the file in VS Code at the error line")
+    .action(async (file, options) => {
+        const proactive = require("../core/agent/proactive");
+        const fs = require("fs");
+        const path = require("path");
+        const { exec } = require("child_process");
+        const deepAnalysis = options.deep;
+        
+        // Handle --show-last (called when clicking notification)
+        if (options.showLast) {
+            const data = proactive.showLastErrors();
+            if (data && options.open && data.file && data.errors.length > 0) {
+                const line = data.errors[0].line || 1;
+                exec(`code -g "${data.file}:${line}"`);
+            }
+            return;
+        }
+        
+        async function checkFile(filePath, showProgress = false) {
+            if (!fs.existsSync(filePath)) {
+                console.error(`File not found: ${filePath}`);
+                return [];
+            }
+            
+            const content = fs.readFileSync(filePath, "utf-8");
+            
+            if (showProgress && deepAnalysis) {
+                process.stdout.write(`   🧠 Analyzing ${path.basename(filePath)}...`);
+            }
+            
+            const errors = await proactive.checkForErrors(filePath, content, { deepAnalysis });
+            
+            if (showProgress && deepAnalysis) {
+                process.stdout.write("\r" + " ".repeat(50) + "\r");
+            }
+            
+            return errors;
+        }
+        
+        if (options.all) {
+            // Check all JS/TS/Python files in current directory
+            const extensions = [".js", ".ts", ".jsx", ".tsx", ".py", ".json"];
+            const files = fs.readdirSync(process.cwd())
+                .filter(f => extensions.includes(path.extname(f)))
+                .filter(f => !f.includes("node_modules"));
+            
+            console.log("\n🔍 Checking files for errors...");
+            if (deepAnalysis) {
+                console.log("🧠 AI deep analysis: ENABLED (may take a moment)\n");
+            } else {
+                console.log("💡 Tip: Use --deep for AI-powered logic error detection\n");
+            }
+            
+            let totalErrors = 0;
+            for (const f of files) {
+                const errors = await checkFile(f, true);
+                if (errors.length > 0) {
+                    console.log(`📁 ${f}: ${errors.length} issue(s)`);
+                    errors.forEach(e => {
+                        const icon = e.severity === "error" ? "❌" : 
+                                     e.severity === "security" ? "🔐" : 
+                                     e.severity === "warning" ? "⚠️" : "💡";
+                        const source = e.source === "ai" ? " 🧠" : "";
+                        console.log(`   ${icon} L${e.line}: ${e.message}${source}`);
+                    });
+                    totalErrors += errors.length;
+                }
+            }
+            
+            if (totalErrors === 0) {
+                console.log("✅ No errors found!");
+            } else {
+                console.log(`\n📊 Total: ${totalErrors} issue(s) in ${files.length} files`);
+            }
+        } else if (file) {
+            if (deepAnalysis) {
+                console.log("\n🧠 Running AI deep analysis...");
+            }
+            
+            const errors = await checkFile(file);
+            
+            if (errors.length === 0) {
+                console.log(`\n✅ No errors in ${path.basename(file)}`);
+            } else {
+                console.log(`\n🚨 Found ${errors.length} issue(s) in ${path.basename(file)}:\n`);
+                errors.forEach(e => {
+                    const icon = e.severity === "error" ? "❌" : 
+                                 e.severity === "security" ? "🔐" : 
+                                 e.severity === "warning" ? "⚠️" : "💡";
+                    const source = e.source === "ai" ? " (AI detected)" : "";
+                    console.log(`${icon} Line ${e.line}: ${e.message}${source}`);
+                    if (e.quickFix) {
+                        console.log(`   💡 Quick fix: ${e.quickFix}`);
+                    }
+                });
+            }
+        } else {
+            console.log("\n🔍 Error Checker");
+            console.log("─".repeat(40));
+            console.log("Usage:");
+            console.log("  ai errors <file>        Check a specific file");
+            console.log("  ai errors <file> --deep AI-powered deep analysis");
+            console.log("  ai errors --all         Check all code files");
+            console.log("  ai errors --all --deep  Deep analyze all files");
+            console.log("\nReal-time detection:");
+            console.log("  ai watch --proactive    Watch files with instant notifications\n");
+        }
     });
 
 // ============================================
@@ -473,7 +765,7 @@ program
 
         // Show sync status
         console.log("\n📊 What gets synced automatically:");
-        console.log("   ✓ Conversations (every ai ask)");
+        console.log("   ✓ Conversations (every mnex ask)");
         console.log("   ✓ Tasks (ai task)");
         console.log("   ✓ Important file edits");
         console.log("   ✓ Git commits");
@@ -533,10 +825,644 @@ program
         if (result.success) {
             console.log("   ✅ Context synced to cloud");
             console.log("\n🎉 Ready! Continue on any device.");
-            console.log("   Just use 'ai ask' - your context is there.\n");
+            console.log("   Just use 'mnex ask' - your context is there.\n");
         } else {
             console.log(`   ❌ Sync failed: ${result.error}\n`);
         }
+    });
+
+// ============================================
+// mnex github - Connect and index GitHub repos
+// ============================================
+program
+    .command("github")
+    .description("Connect GitHub to expand your AI's knowledge base")
+    .option("-i, --index", "Index your GitHub repos into memory")
+    .option("-r, --repos", "List your repositories")
+    .option("--repo <repo>", "Index a specific repo (owner/name)")
+    .option("-n, --max <number>", "Max repos to index", "10")
+    .option("--starred", "Include starred repos")
+    .action(async (options) => {
+        const github = require("../core/integrations/github");
+        const config = require("../core/config");
+
+        console.log("\n🐙 GitHub Integration");
+        console.log("─".repeat(40));
+
+        const githubToken = config.get("github.token");
+        const supermemoryKey = config.get("supermemory.apiKey");
+
+        if (!githubToken) {
+            console.log("❌ No GitHub token configured\n");
+            console.log("To set up GitHub integration:");
+            console.log("1. Create a Personal Access Token at:");
+            console.log("   https://github.com/settings/tokens/new");
+            console.log("   (select 'repo' scope for private repos, or just public_repo)");
+            console.log("\n2. Add to your config (~/.config/mnex/.env):");
+            console.log("   GITHUB_TOKEN=your_token_here\n");
+            return;
+        }
+
+        if (!supermemoryKey && options.index) {
+            console.log("❌ Supermemory API key required for indexing");
+            console.log("   Run 'ai init' to set up Supermemory\n");
+            return;
+        }
+
+        try {
+            // Show user info
+            const user = await github.getCurrentUser(githubToken);
+            console.log(`✅ Connected as: ${user.login}`);
+            console.log(`   Repos: ${user.public_repos} public, ${user.total_private_repos || 0} private\n`);
+
+            // List repos
+            if (options.repos) {
+                const repos = await github.getUserRepos(githubToken, { perPage: 20 });
+                console.log("📦 Your Repositories:");
+                console.log("─".repeat(40));
+                repos.forEach((r) => {
+                    const visibility = r.private ? "🔒" : "🌐";
+                    console.log(`${visibility} ${r.full_name}`);
+                    if (r.description) console.log(`   ${r.description.substring(0, 60)}`);
+                });
+                console.log("");
+                return;
+            }
+
+            // Index specific repo
+            if (options.repo) {
+                const [owner, name] = options.repo.split("/");
+                if (!owner || !name) {
+                    console.log("❌ Invalid repo format. Use: owner/repo-name");
+                    return;
+                }
+                console.log(`📥 Indexing ${options.repo}...`);
+                const result = await github.indexRepo(owner, name, githubToken, supermemoryKey);
+                console.log(`\n✅ Indexed ${result.indexed} items from ${options.repo}`);
+                if (result.errors.length > 0) {
+                    console.log(`⚠️  ${result.errors.length} errors occurred`);
+                }
+                return;
+            }
+
+            // Full index
+            if (options.index) {
+                console.log("📥 Starting GitHub indexing...");
+                console.log(`   Max repos: ${options.max}`);
+                console.log(`   Include starred: ${options.starred ? "yes" : "no"}\n`);
+
+                const result = await github.indexUserGitHub(githubToken, supermemoryKey, {
+                    maxRepos: parseInt(options.max),
+                    includeStarred: options.starred,
+                });
+
+                console.log("\n" + "─".repeat(40));
+                console.log(`✅ GitHub Indexing Complete!`);
+                console.log(`   📦 Repos indexed: ${result.repos}`);
+                console.log(`   📄 Total items: ${result.items}`);
+                if (result.errors.length > 0) {
+                    console.log(`   ⚠️  Errors: ${result.errors.length}`);
+                }
+                console.log("\n🧠 Your GitHub knowledge is now in your AI's memory!");
+                console.log('   Try: mnex ask "what projects am I working on?"\n');
+                return;
+            }
+
+            // Default: show help
+            console.log("Commands:");
+            console.log("   mnex github --repos          List your repositories");
+            console.log("   mnex github --index          Index all repos into memory");
+            console.log("   mnex github --repo user/repo Index a specific repo");
+            console.log("   mnex github --index --max 20 Index up to 20 repos");
+            console.log("   mnex github --index --starred Include starred repos\n");
+
+        } catch (error) {
+            console.error("❌ Error:", error.message);
+            if (error.message.includes("401")) {
+                console.log("   Your GitHub token may be invalid or expired");
+            }
+        }
+    });
+
+// ============================================
+// ai journal - Auto-document your day
+// ============================================
+program
+    .command("journal")
+    .description("Auto-generate development journal for today")
+    .option("-w, --weekly", "Generate weekly summary")
+    .option("-r, --read [date]", "Read a past journal entry")
+    .option("-s, --search <query>", "Search past journal entries")
+    .action(async (options) => {
+        const journal = require("../core/agent/journal");
+        const cwd = process.cwd();
+
+        console.log("\n📝 Future You Journal");
+        console.log("─".repeat(40));
+
+        if (options.weekly) {
+            console.log("📊 Generating weekly summary...\n");
+            const summary = await journal.getWeeklySummary(cwd);
+            console.log(summary);
+            console.log("");
+            return;
+        }
+
+        if (options.read) {
+            const entries = journal.readJournalEntries(cwd, 7);
+            if (entries.length === 0) {
+                console.log("No journal entries found.\n");
+                console.log("Create your first entry with: ai journal\n");
+                return;
+            }
+
+            // If specific date provided
+            if (typeof options.read === "string") {
+                const entry = entries.find(e => e.date === options.read);
+                if (entry) {
+                    console.log(entry.content);
+                } else {
+                    console.log(`No entry found for ${options.read}`);
+                }
+            } else {
+                // Show recent entries
+                console.log("📚 Recent journal entries:\n");
+                for (const entry of entries) {
+                    console.log(`📅 ${entry.date}`);
+                    console.log(entry.content.substring(0, 300) + "...\n");
+                    console.log("─".repeat(40) + "\n");
+                }
+            }
+            return;
+        }
+
+        if (options.search) {
+            const results = journal.searchJournal(cwd, options.search);
+            if (results.length === 0) {
+                console.log(`No entries found matching "${options.search}"\n`);
+                return;
+            }
+            console.log(`🔍 Found ${results.length} entries:\n`);
+            for (const r of results) {
+                console.log(`📅 ${r.date}`);
+                console.log(`   ${r.snippet}\n`);
+            }
+            return;
+        }
+
+        // Default: create today's journal
+        const result = await journal.createJournalEntry(cwd);
+        if (result) {
+            console.log("─".repeat(40));
+            console.log("\n📖 Preview:\n");
+            console.log(result.entry.substring(0, 500) + "...\n");
+        }
+    });
+
+// ============================================
+// ai projects - Cross-project intelligence
+// ============================================
+program
+    .command("projects")
+    .description("Manage cross-project intelligence")
+    .option("-l, --list", "List registered projects")
+    .option("-a, --add [path]", "Register a project")
+    .option("-i, --index", "Index all registered projects")
+    .option("--index-one <path>", "Index a specific project")
+    .option("-s, --search <query>", "Search across all projects")
+    .action(async (options) => {
+        const crossproject = require("../core/agent/crossproject");
+        const configModule = require("../core/config");
+        const supermemoryKey = configModule.get("supermemory.apiKey");
+
+        console.log("\n🧠 Cross-Project Intelligence");
+        console.log("─".repeat(40));
+
+        if (options.list) {
+            const projects = crossproject.getProjects();
+            if (projects.length === 0) {
+                console.log("No projects registered yet.\n");
+                console.log("Register projects with: ai projects --add /path/to/project\n");
+                return;
+            }
+            console.log(`📁 ${projects.length} registered projects:\n`);
+            for (const p of projects) {
+                const indexed = p.indexed ? "✅" : "⏳";
+                console.log(`${indexed} ${p.name}`);
+                console.log(`   Path: ${p.path}`);
+                console.log(`   Languages: ${p.languages.join(", ") || "unknown"}`);
+                console.log(`   Frameworks: ${p.frameworks.join(", ") || "none"}`);
+                console.log("");
+            }
+            return;
+        }
+
+        if (options.add) {
+            const projectPath = typeof options.add === "string" 
+                ? path.resolve(options.add) 
+                : process.cwd();
+            
+            console.log(`📥 Registering: ${projectPath}`);
+            const info = crossproject.registerProject(projectPath);
+            console.log(`✅ Registered: ${info.name}`);
+            console.log(`   Languages: ${info.languages.join(", ") || "detecting..."}`);
+            console.log("\nTo index this project for cross-project search:");
+            console.log("   ai projects --index\n");
+            return;
+        }
+
+        if (options.indexOne) {
+            if (!supermemoryKey) {
+                console.log("❌ Supermemory API key required for indexing");
+                console.log("   Run 'ai init' to configure\n");
+                return;
+            }
+            const projectPath = path.resolve(options.indexOne);
+            console.log(`📥 Indexing: ${projectPath}`);
+            const result = await crossproject.indexProject(projectPath, supermemoryKey);
+            console.log(`\n✅ Indexed ${result.indexed} items`);
+            if (result.errors.length > 0) {
+                console.log(`⚠️  ${result.errors.length} errors`);
+            }
+            return;
+        }
+
+        if (options.index) {
+            if (!supermemoryKey) {
+                console.log("❌ Supermemory API key required for indexing");
+                console.log("   Run 'ai init' to configure\n");
+                return;
+            }
+            console.log("📥 Indexing all registered projects...\n");
+            const result = await crossproject.indexAllProjects(supermemoryKey);
+            console.log(`\n${"─".repeat(40)}`);
+            console.log(`✅ Indexed ${result.indexed}/${result.total} projects`);
+            if (result.errors.length > 0) {
+                console.log(`⚠️  ${result.errors.length} errors`);
+            }
+            console.log('\n🧠 Cross-project search enabled!');
+            console.log('   Try: ai projects --search "authentication"\n');
+            return;
+        }
+
+        if (options.search) {
+            if (!supermemoryKey) {
+                console.log("❌ Supermemory API key required for search");
+                return;
+            }
+            console.log(`🔍 Searching across all projects: "${options.search}"\n`);
+            const results = await crossproject.searchAcrossProjects(options.search, supermemoryKey);
+            
+            const projectNames = Object.keys(results);
+            if (projectNames.length === 0) {
+                console.log("No matches found.\n");
+                return;
+            }
+
+            for (const project of projectNames) {
+                console.log(`📁 ${project}:`);
+                for (const hit of results[project].slice(0, 2)) {
+                    const snippet = hit.content?.substring(0, 200) || "";
+                    console.log(`   ${snippet}...\n`);
+                }
+            }
+            return;
+        }
+
+        // Default: show help
+        console.log("Manage your cross-project knowledge base.\n");
+        console.log("Commands:");
+        console.log("   ai projects --list              List registered projects");
+        console.log("   ai projects --add [path]        Register current/specified project");
+        console.log("   ai projects --index             Index all projects into memory");
+        console.log("   ai projects --search <query>    Search across all projects\n");
+        console.log("The more projects you index, the smarter your agent becomes!");
+        console.log("It will find similar solutions you've written before.\n");
+    });
+
+// ============================================
+// ai error - Error Solutions Database
+// ============================================
+program
+    .command("error [errorMessage]")
+    .description("Find or store error solutions")
+    .option("-s, --solve <solution>", "Store a solution for the error")
+    .action(async (errorMessage, options) => {
+        const knowledge = require("../core/agent/knowledge");
+        const projectName = getProjectName();
+
+        console.log("\n🐛 Error Solutions Database");
+        console.log("─".repeat(40));
+
+        if (!errorMessage) {
+            const stats = knowledge.getStats();
+            console.log(`📊 ${stats.errors} error solutions stored\n`);
+            console.log("Usage:");
+            console.log('   ai error "Cannot read property of undefined"');
+            console.log('   ai error "error message" --solve "how I fixed it"\n');
+            return;
+        }
+
+        if (options.solve) {
+            // Store solution
+            console.log("💾 Storing solution...");
+            await knowledge.storeError(errorMessage, options.solve, { project: projectName });
+            console.log("✅ Solution saved!");
+            console.log("   Next time you see this error, I'll remind you.\n");
+        } else {
+            // Search for solutions
+            console.log(`🔍 Searching for: "${errorMessage.substring(0, 50)}..."\n`);
+            const results = await knowledge.findErrorSolution(errorMessage);
+
+            if (results.length === 0) {
+                console.log("No solutions found for this error.");
+                console.log("\nTip: When you solve it, save with:");
+                console.log(`   ai error "${errorMessage.substring(0, 30)}..." --solve "your solution"\n`);
+            } else {
+                console.log(`Found ${results.length} solution(s):\n`);
+                for (const r of results.slice(0, 3)) {
+                    if (r.solution) {
+                        console.log(`📁 ${r.project} (${r.date?.split("T")[0] || "cached"})`);
+                        console.log(`   Error: ${r.error.substring(0, 60)}...`);
+                        console.log(`   Solution: ${r.solution}\n`);
+                    } else if (r.content) {
+                        console.log(r.content.substring(0, 300) + "...\n");
+                    }
+                }
+            }
+        }
+    });
+
+// ============================================
+// ai decide - Decision Log
+// ============================================
+program
+    .command("decide <decision>")
+    .description("Log an architectural/technical decision")
+    .option("-r, --reason <reasoning>", "Why this decision was made")
+    .option("-a, --alternatives <alts>", "Alternatives considered (comma-separated)")
+    .option("-s, --search", "Search past decisions instead")
+    .action(async (decision, options) => {
+        const knowledge = require("../core/agent/knowledge");
+        const projectName = getProjectName();
+
+        console.log("\n📋 Decision Log");
+        console.log("─".repeat(40));
+
+        if (options.search) {
+            // Search decisions
+            console.log(`🔍 Searching: "${decision}"\n`);
+            const results = await knowledge.searchDecisions(decision);
+
+            if (results.length === 0) {
+                console.log("No matching decisions found.\n");
+            } else {
+                console.log(`Found ${results.length} decision(s):\n`);
+                for (const r of results.slice(0, 5)) {
+                    if (r.decision) {
+                        console.log(`📌 ${r.decision}`);
+                        console.log(`   Reason: ${r.reasoning}`);
+                        console.log(`   Project: ${r.project} | ${r.timestamp?.split("T")[0]}\n`);
+                    } else if (r.content) {
+                        console.log(r.content.substring(0, 300) + "...\n");
+                    }
+                }
+            }
+            return;
+        }
+
+        // Log decision
+        const reasoning = options.reason || "No reasoning provided";
+        const alternatives = options.alternatives?.split(",").map(s => s.trim()) || [];
+
+        console.log("💾 Logging decision...");
+        await knowledge.logDecision(decision, reasoning, {
+            project: projectName,
+            alternatives,
+        });
+        console.log("✅ Decision logged!\n");
+        console.log(`📌 ${decision}`);
+        console.log(`   Reason: ${reasoning}`);
+        if (alternatives.length > 0) {
+            console.log(`   Alternatives: ${alternatives.join(", ")}`);
+        }
+        console.log("\nSearch later with: ai decide --search \"keyword\"\n");
+    });
+
+// ============================================
+// ai learned - Learning Capture
+// ============================================
+program
+    .command("learned <insight>")
+    .description("Capture a learning or insight")
+    .option("-c, --category <cat>", "Category (e.g., react, git, devops)")
+    .option("-s, --search", "Search past learnings instead")
+    .action(async (insight, options) => {
+        const knowledge = require("../core/agent/knowledge");
+        const projectName = getProjectName();
+
+        console.log("\n📚 Learning Capture");
+        console.log("─".repeat(40));
+
+        if (options.search) {
+            console.log(`🔍 Searching: "${insight}"\n`);
+            const results = await knowledge.searchLearnings(insight);
+
+            if (results.length === 0) {
+                console.log("No matching learnings found.\n");
+            } else {
+                console.log(`Found ${results.length} learning(s):\n`);
+                for (const r of results.slice(0, 5)) {
+                    if (r.insight) {
+                        console.log(`💡 ${r.insight}`);
+                        console.log(`   Category: ${r.category} | ${r.timestamp?.split("T")[0]}\n`);
+                    } else if (r.content) {
+                        console.log(r.content.substring(0, 300) + "...\n");
+                    }
+                }
+            }
+            return;
+        }
+
+        // Capture learning
+        console.log("💾 Capturing insight...");
+        await knowledge.captureLearning(insight, {
+            project: projectName,
+            category: options.category || "general",
+        });
+        console.log("✅ Learning captured!\n");
+        console.log(`💡 "${insight}"`);
+        console.log(`   Category: ${options.category || "general"}`);
+        console.log("\nSearch later with: ai learned --search \"keyword\"\n");
+    });
+
+// ============================================
+// ai snippet - Code Snippet Library
+// ============================================
+program
+    .command("snippet <action> [name]")
+    .description("Save or find code snippets")
+    .option("-c, --code <code>", "The code snippet")
+    .option("-l, --lang <language>", "Programming language", "javascript")
+    .option("-d, --desc <description>", "Description")
+    .action(async (action, name, options) => {
+        const knowledge = require("../core/agent/knowledge");
+
+        console.log("\n📦 Code Snippet Library");
+        console.log("─".repeat(40));
+
+        if (action === "save" && name) {
+            if (!options.code) {
+                console.log("❌ Please provide code with --code flag");
+                console.log('   ai snippet save "debounce" --code "function debounce..."');
+                return;
+            }
+
+            console.log("💾 Saving snippet...");
+            await knowledge.saveSnippet(name, options.code, {
+                language: options.lang,
+                description: options.desc || "",
+            });
+            console.log(`✅ Snippet "${name}" saved!\n`);
+            return;
+        }
+
+        if (action === "find" && name) {
+            console.log(`🔍 Searching: "${name}"\n`);
+            const results = await knowledge.findSnippets(name);
+
+            if (results.length === 0) {
+                console.log("No matching snippets found.\n");
+            } else {
+                console.log(`Found ${results.length} snippet(s):\n`);
+                for (const r of results.slice(0, 3)) {
+                    if (r.name) {
+                        console.log(`📌 ${r.name} (${r.language})`);
+                        console.log(`   ${r.description || "No description"}`);
+                        console.log(`\`\`\`${r.language}`);
+                        console.log(r.code.substring(0, 200));
+                        console.log("```\n");
+                    } else if (r.content) {
+                        console.log(r.content.substring(0, 400) + "...\n");
+                    }
+                }
+            }
+            return;
+        }
+
+        if (action === "list") {
+            const cache = knowledge.loadCache();
+            console.log(`📊 ${cache.snippets.length} snippets stored\n`);
+            for (const s of cache.snippets.slice(-10)) {
+                console.log(`   • ${s.name} (${s.language})`);
+            }
+            return;
+        }
+
+        // Show help
+        console.log("Commands:");
+        console.log('   ai snippet save "name" --code "code" --lang js');
+        console.log('   ai snippet find "debounce"');
+        console.log("   ai snippet list\n");
+    });
+
+// ============================================
+// ai remind - Smart Reminders
+// ============================================
+program
+    .command("remind <message>")
+    .description("Create context-aware reminders")
+    .option("-w, --when <context>", "Trigger context (what you're working on)")
+    .option("-f, --file <pattern>", "Trigger when editing files matching pattern")
+    .option("-p, --project <name>", "Trigger when in specific project")
+    .option("-l, --list", "List all reminders")
+    .option("--clear", "Clear all reminders")
+    .action(async (message, options) => {
+        const reminders = require("../core/agent/reminders");
+
+        console.log("\n⏰ Smart Reminders");
+        console.log("─".repeat(40));
+
+        if (options.list || message === "list") {
+            const all = reminders.listReminders();
+            if (all.length === 0) {
+                console.log("No reminders set.\n");
+                return;
+            }
+            console.log(`📌 ${all.length} reminder(s):\n`);
+            for (const r of all) {
+                console.log(reminders.formatReminder(r));
+                console.log("");
+            }
+            return;
+        }
+
+        if (options.clear || message === "clear") {
+            reminders.clearReminders();
+            console.log("✅ All reminders cleared.\n");
+            return;
+        }
+
+        // Determine trigger
+        let trigger;
+        if (options.file) {
+            trigger = { type: "file", value: options.file };
+        } else if (options.project) {
+            trigger = { type: "project", value: options.project };
+        } else if (options.when) {
+            trigger = { type: "context", value: options.when };
+        } else {
+            console.log("❌ Please specify when to remind:");
+            console.log('   --when "working on auth"');
+            console.log('   --file "api/routes"');
+            console.log('   --project "my-app"\n');
+            return;
+        }
+
+        const reminder = reminders.createReminder(message, trigger);
+        console.log("✅ Reminder created!\n");
+        console.log(reminders.formatReminder(reminder));
+        console.log("\nI'll remind you when the context matches.\n");
+    });
+
+// ============================================
+// ai knowledge - Knowledge Base Stats
+// ============================================
+program
+    .command("knowledge")
+    .description("View your personal knowledge base statistics")
+    .action(async () => {
+        const knowledge = require("../core/agent/knowledge");
+        const config = require("../core/config");
+
+        console.log("\n🧠 Personal Knowledge Base");
+        console.log("─".repeat(40));
+
+        const stats = knowledge.getStats();
+        const supermemoryKey = config.get("supermemory.apiKey");
+
+        console.log(`📊 Local Cache:`);
+        console.log(`   🐛 Error Solutions: ${stats.errors}`);
+        console.log(`   📋 Decisions: ${stats.decisions}`);
+        console.log(`   📚 Learnings: ${stats.learnings}`);
+        console.log(`   📦 Snippets: ${stats.snippets}`);
+        console.log(`   ─────────────────`);
+        console.log(`   Total: ${stats.total} items\n`);
+
+        if (supermemoryKey) {
+            console.log("☁️  Supermemory: Connected");
+            console.log("   All items synced to cloud for cross-device access.\n");
+        } else {
+            console.log("☁️  Supermemory: Not configured");
+            console.log("   Run 'ai init' to enable cloud sync.\n");
+        }
+
+        console.log("Commands:");
+        console.log("   ai error      - Error solutions database");
+        console.log("   ai decide     - Decision log");
+        console.log("   ai learned    - Learning capture");
+        console.log("   ai snippet    - Code snippet library");
+        console.log("   ai remind     - Smart reminders\n");
     });
 
 // ============================================
@@ -544,13 +1470,13 @@ program
 // ============================================
 program
     .command("init")
-    .description("Initialize AI Agent with your API keys")
+    .description("Initialize mnex with your API keys")
     .action(async () => {
         const readline = require("readline");
-        const configDir = path.join(os.homedir(), ".config", "ai-agent");
+        const configDir = path.join(os.homedir(), ".config", "mnex");
         const configFile = path.join(configDir, ".env");
 
-        console.log("\n🤖 AI Agent Setup Wizard");
+        console.log("\n🧠 mnex Setup Wizard");
         console.log("─".repeat(40));
 
         // Check if already configured
@@ -578,7 +1504,7 @@ program
 
             const choice = await question("Enter 1 or 2: ");
 
-            let envContent = "# AI Agent Configuration\n\n";
+            let envContent = "# mnex Configuration\n\n";
 
             if (choice === "1") {
                 console.log("\nGet your OpenAI API key at: https://platform.openai.com/api-keys\n");
@@ -602,6 +1528,12 @@ program
                 envContent += `SUPERMEMORY_API_KEY=${superKey.trim()}\n`;
             }
 
+            console.log("\n(Optional) GitHub for knowledge expansion: https://github.com/settings/tokens");
+            const githubToken = await question("Enter GitHub Personal Access Token (or press Enter to skip): ");
+            if (githubToken.trim()) {
+                envContent += `GITHUB_TOKEN=${githubToken.trim()}\n`;
+            }
+
             // Create config directory and file
             if (!fs.existsSync(configDir)) {
                 fs.mkdirSync(configDir, { recursive: true });
@@ -610,12 +1542,292 @@ program
 
             console.log("\n✅ Configuration saved to: " + configFile);
             console.log("\n🎉 Setup complete! Try:");
-            console.log('   ai ask "hello, what can you do?"\n');
+            console.log('   mnex ask "hello, what can you do?"');
+            if (githubToken.trim()) {
+                console.log('   ai github --index  # Index your GitHub repos\n');
+            } else {
+                console.log("");
+            }
 
         } catch (error) {
             console.error("Setup failed:", error.message);
         } finally {
             rl.close();
+        }
+    });
+
+// ============================================
+// ai focus - Set/show the currently focused file/project
+// ============================================
+program
+    .command("focus [path]")
+    .description("Set or show the currently focused file/project")
+    .action(async (focusPath) => {
+        const filewatcher = require("../core/monitor/filewatcher");
+
+        console.log("\n🎯 AI Agent Focus");
+        console.log("─".repeat(40));
+
+        if (focusPath) {
+            // Set focus
+            const resolvedPath = path.resolve(focusPath);
+            if (!fs.existsSync(resolvedPath)) {
+                console.log(`❌ Path does not exist: ${resolvedPath}`);
+                return;
+            }
+
+            const focus = filewatcher.setFocus(resolvedPath);
+            console.log(`✅ Focus set to:`);
+            console.log(`   📁 Project: ${focus.project}`);
+            console.log(`   📄 File: ${path.basename(focus.file)}`);
+            console.log(`   🕐 Since: ${new Date(focus.timestamp).toLocaleTimeString()}`);
+            console.log("\n💡 Notifications will now prioritize this project.\n");
+        } else {
+            // Show current focus
+            const focus = filewatcher.getFocus();
+            if (focus) {
+                console.log(`📁 Currently focused on:`);
+                console.log(`   Project: ${focus.project}`);
+                console.log(`   File: ${path.basename(focus.file)}`);
+                console.log(`   Since: ${new Date(focus.timestamp).toLocaleTimeString()}`);
+                console.log("\n💡 Focus auto-updates when you edit files.\n");
+            } else {
+                console.log("No focus set yet.");
+                console.log("\n💡 Focus is auto-set when you:");
+                console.log("   • Edit and save a file");
+                console.log("   • Run: ai focus <path>");
+                console.log("   • Change directory in terminal\n");
+            }
+        }
+    });
+
+// ============================================
+// ai service - Manage background services
+// ============================================
+program
+    .command("service <action>")
+    .description("Manage background services (start/stop/status/logs)")
+    .option("--clear", "Clear logs (with logs action)")
+    .action(async (action, options) => {
+        const serviceManager = require("../core/service/manager");
+        const readline = require("readline");
+
+        console.log("\n🔧 AI Agent Service Manager");
+        console.log("─".repeat(40));
+
+        switch (action) {
+            case "start":
+                try {
+                    // First check config
+                    const configCheck = serviceManager.checkRequiredConfig();
+                    
+                    // Check if config is missing
+                    if (!configCheck.configured) {
+                        console.log("❌ Missing required configuration:\n");
+                        for (const missing of configCheck.missing) {
+                            console.log(`   • ${missing}`);
+                        }
+                        console.log("\n💡 Run 'ai init' to configure your API keys first.");
+                        
+                        // Prompt user
+                        const rl = readline.createInterface({
+                            input: process.stdin,
+                            output: process.stdout
+                        });
+                        
+                        const answer = await new Promise(resolve => {
+                            rl.question("\nWould you like to run 'ai init' now? (y/n): ", resolve);
+                        });
+                        rl.close();
+                        
+                        if (answer.toLowerCase() === 'y' || answer.toLowerCase() === 'yes') {
+                            console.log("\n");
+                            const initCommand = program.commands.find(c => c.name() === 'init');
+                            if (initCommand) {
+                                await initCommand.parseAsync([], { from: 'user' });
+                            }
+                        }
+                        return;
+                    }
+
+                    // 🔐 ASK FOR PERMISSION BEFORE ACCESSING SENSITIVE KEYS
+                    const sensitiveKeys = serviceManager.getSensitiveKeys(configCheck.envVars);
+                    
+                    if (sensitiveKeys.length > 0) {
+                        console.log("🔐 Permission Required");
+                        console.log("─".repeat(40));
+                        console.log("\nTo run background services, AI Agent needs to embed");
+                        console.log("the following credentials in the LaunchAgent config:\n");
+                        
+                        for (const key of sensitiveKeys) {
+                            const maskedValue = serviceManager.maskKey(configCheck.envVars[key]);
+                            console.log(`   • ${key}: ${maskedValue}`);
+                        }
+                        
+                        console.log("\n⚠️  These will be stored in:");
+                        console.log(`   ${serviceManager.PLIST_PATH}`);
+                        console.log("\n   This file is only readable by your user account.");
+                        
+                        const rl = readline.createInterface({
+                            input: process.stdin,
+                            output: process.stdout
+                        });
+                        
+                        const consent = await new Promise(resolve => {
+                            rl.question("\nAllow access to these credentials? (y/n): ", resolve);
+                        });
+                        rl.close();
+                        
+                        if (consent.toLowerCase() !== 'y' && consent.toLowerCase() !== 'yes') {
+                            console.log("\n❌ Permission denied. Services not started.");
+                            console.log("   You can still use 'ai watch --proactive' manually.\n");
+                            return;
+                        }
+                        
+                        console.log("\n✅ Permission granted.\n");
+                    }
+
+                    console.log("Starting all services...\n");
+                    const results = await serviceManager.startAllServices();
+
+                    console.log("📊 Service Status:");
+                    console.log("─".repeat(30));
+
+                    // Terminal Monitor
+                    const tm = results.terminalMonitor;
+                    console.log(`  Terminal Monitor: ${tm.success ? "✅ " + tm.message : "❌ " + tm.message}`);
+                    if (tm.note) console.log(`    ↳ ${tm.note}`);
+
+                    // File Watcher
+                    const fw = results.fileWatcher;
+                    console.log(`  File Watcher:     ${fw.success ? "✅ " + fw.message : "❌ " + fw.message}`);
+
+                    // Proactive Analyzer
+                    const pa = results.proactiveAnalyzer;
+                    console.log(`  Proactive Mode:   ${pa.success ? "✅ " + pa.message : "❌ " + pa.message}`);
+
+                    console.log("\n💡 Services are configured to auto-start on login.");
+                    console.log("   View logs: ai service logs");
+                    console.log("");
+                } catch (e) {
+                    console.error("❌ Failed to start services:", e.message);
+                }
+                break;
+
+            case "stop":
+                console.log("Stopping all services...\n");
+                try {
+                    const results = await serviceManager.stopAllServices();
+
+                    console.log("📊 Service Status:");
+                    console.log("─".repeat(30));
+                    console.log(`  Terminal Monitor: ${results.terminalMonitor.success ? "✅ Stopped" : "❌ " + results.terminalMonitor.message}`);
+                    if (results.terminalMonitor.note) console.log(`    ↳ ${results.terminalMonitor.note}`);
+                    console.log(`  File Watcher:     ${results.fileWatcher.success ? "✅ Stopped" : "❌ " + results.fileWatcher.message}`);
+                    console.log(`  Proactive Mode:   ✅ Stopped`);
+                    console.log("");
+                } catch (e) {
+                    console.error("❌ Failed to stop services:", e.message);
+                }
+                break;
+
+            case "status":
+                try {
+                    const status = await serviceManager.getServiceStatus();
+                    const filewatcher = require("../core/monitor/filewatcher");
+                    const focus = filewatcher.getFocus();
+
+                    console.log("📊 Current Service Status:\n");
+
+                    // Terminal Monitor
+                    const tm = status.terminalMonitor;
+                    const tmIcon = tm.running ? "🟢" : "🔴";
+                    console.log(`  ${tmIcon} Terminal Monitor`);
+                    console.log(`     Type: ${tm.type}`);
+                    console.log(`     Status: ${tm.running ? "Running" : "Not configured"}`);
+                    console.log(`     Description: Tracks commands you run in terminal`);
+                    console.log("");
+
+                    // File Watcher
+                    const fw = status.fileWatcher;
+                    const fwIcon = fw.running ? "🟢" : "🔴";
+                    console.log(`  ${fwIcon} File Watcher`);
+                    console.log(`     Type: ${fw.type}`);
+                    console.log(`     Status: ${fw.running ? "Running" : "Stopped"}`);
+                    console.log(`     Description: Monitors file changes in watched directories`);
+                    console.log("");
+
+                    // Proactive Analyzer
+                    const pa = status.proactiveAnalyzer;
+                    const paIcon = pa.running ? "🟢" : "🔴";
+                    console.log(`  ${paIcon} Proactive Analyzer (Spidey Sense)`);
+                    console.log(`     Type: ${pa.type}`);
+                    console.log(`     Status: ${pa.running ? "Running" : "Stopped"}`);
+                    console.log(`     Description: Real-time code suggestions & notifications`);
+                    console.log("");
+
+                    // Current Focus
+                    console.log("  🎯 Current Focus");
+                    if (focus) {
+                        console.log(`     Project: ${focus.project}`);
+                        console.log(`     File: ${path.basename(focus.file)}`);
+                        console.log(`     Since: ${new Date(focus.timestamp).toLocaleTimeString()}`);
+                    } else {
+                        console.log(`     No focus set (auto-sets when you edit files)`);
+                    }
+                    console.log("");
+
+                    // Summary
+                    const runningCount = [tm.running, fw.running, pa.running].filter(Boolean).length;
+                    console.log("─".repeat(40));
+                    console.log(`  ${runningCount}/3 services running\n`);
+
+                    if (runningCount < 3) {
+                        console.log("💡 Start all services: ai service start\n");
+                    }
+                } catch (e) {
+                    console.error("❌ Failed to get status:", e.message);
+                }
+                break;
+
+            case "logs":
+                if (options.clear) {
+                    serviceManager.clearLogs();
+                    console.log("✅ Logs cleared\n");
+                } else {
+                    console.log("📜 Recent Service Logs:\n");
+                    console.log("─".repeat(40));
+                    const logs = serviceManager.getLogs(100);
+                    if (logs) {
+                        console.log(logs);
+                    } else {
+                        console.log("No logs yet. Service may not have started.");
+                    }
+                    console.log("\n" + "─".repeat(40));
+                    console.log("Clear logs: ai service logs --clear\n");
+                }
+                break;
+
+            case "restart":
+                console.log("Restarting all services...\n");
+                try {
+                    await serviceManager.stopAllServices();
+                    console.log("⏳ Stopped. Starting...\n");
+                    const results = await serviceManager.startAllServices();
+                    console.log("✅ All services restarted\n");
+                } catch (e) {
+                    console.error("❌ Failed to restart:", e.message);
+                }
+                break;
+
+            default:
+                console.log("Unknown action. Available actions:");
+                console.log("  ai service start    - Start all background services");
+                console.log("  ai service stop     - Stop all services");
+                console.log("  ai service status   - Show service status");
+                console.log("  ai service logs     - View service logs");
+                console.log("  ai service restart  - Restart all services");
+                console.log("");
         }
     });
 
@@ -640,7 +1852,19 @@ program
             console.log("   Run: ai init\n");
         }
 
-        console.log("\n1️⃣  Terminal Monitoring (shell hook):");
+        console.log("\n🚀 Quick Start (Recommended):");
+        console.log("   Run this single command to enable everything:\n");
+        console.log("   ai service start\n");
+        console.log("   This will:");
+        console.log("   • Install terminal monitoring (zsh hook)");
+        console.log("   • Start file watcher (auto-starts on login)");
+        console.log("   • Enable proactive suggestions with notifications");
+        console.log("");
+
+        console.log("─".repeat(40));
+        console.log("\n📖 Manual Setup (Alternative):\n");
+
+        console.log("1️⃣  Terminal Monitoring (shell hook):");
         console.log("   Add this line to your ~/.zshrc:\n");
         console.log(`   source "${hookPath}"\n`);
         console.log("   Then run: source ~/.zshrc\n");
@@ -648,16 +1872,258 @@ program
         console.log("2️⃣  Editor Monitoring (file watcher):");
         console.log("   Run in your project directory:\n");
         console.log("   ai watch .\n");
-        console.log("   This watches file changes from ANY editor.\n");
 
         console.log("─".repeat(40));
         console.log("Config file: " + configFile);
         console.log("\nCommands:");
         console.log("   ai init            # Setup API keys");
-        console.log("   ai-monitor on/off  # Toggle terminal monitoring");
-        console.log("   ai watch [path]    # Start file watcher");
+        console.log("   ai service start   # Start all background services");
+        console.log("   ai service status  # Check service status");
         console.log("   ai status          # Show current context");
         console.log('   ai ask "question"  # Ask the AI\n');
+    });
+
+// ============================================
+// ai profile — Developer DNA
+// ============================================
+program
+    .command("profile")
+    .description("Generate a Developer DNA profile from your work history")
+    .option("--json", "Output machine-readable JSON")
+    .action((options) => {
+        const profile = require("../core/agent/profile");
+        if (options.json) {
+            console.log(JSON.stringify(profile.build(), null, 2));
+        } else {
+            console.log(profile.format());
+        }
+    });
+
+// ============================================
+// ai eval — Eval harness
+// ============================================
+const evalCmd = program.command("eval").description("Run regression evals on the agent");
+
+evalCmd
+    .command("run")
+    .description("Run the eval suite")
+    .option("--baseline", "Save this run as the new baseline")
+    .action(async (options) => {
+        const runner = require("../core/eval/runner");
+        console.log("Running eval suite…\n");
+        const report = await runner.runSuite({ project: getProjectName() });
+        const baseline = runner.loadBaseline();
+        const diff = runner.diffBaseline(report, baseline);
+        console.log(runner.formatReport(report, diff));
+        if (options.baseline) {
+            runner.saveBaseline(report);
+            console.log("\n📌 Saved as new baseline.");
+        }
+    });
+
+evalCmd
+    .command("add <question>")
+    .description("Add a case (uses a default min_length expectation)")
+    .option("--contains <text>", "Require answer to contain this substring")
+    .action((question, options) => {
+        const runner = require("../core/eval/runner");
+        const expect = options.contains
+            ? { contains_any: [options.contains], min_length: 10 }
+            : { min_length: 10 };
+        const id = runner.addCase(question, expect);
+        console.log(`Added case ${id}`);
+    });
+
+evalCmd
+    .command("baseline")
+    .description("Re-run the suite and store results as the new baseline")
+    .action(async () => {
+        const runner = require("../core/eval/runner");
+        const report = await runner.runSuite({ project: getProjectName() });
+        runner.saveBaseline(report);
+        console.log("📌 Baseline updated.");
+    });
+
+// ============================================
+// ai graph — Causal work graph
+// ============================================
+const graphCmd = program.command("graph").description("Query the causal work graph");
+
+graphCmd
+    .command("stats")
+    .description("Show graph stats (nodes, edges, types)")
+    .action(() => {
+        const causal = require("../core/memory/causal");
+        const s = causal.stats();
+        console.log(`Nodes: ${s.totalNodes}   Edges: ${s.totalEdges}`);
+        console.log("\nBy type:");
+        for (const t of s.byType) console.log(`  ${t.type.padEnd(14)} ${t.c}`);
+        console.log("\nBy relation:");
+        for (const r of s.byRelation) console.log(`  ${r.relation.padEnd(14)} ${r.c}`);
+    });
+
+graphCmd
+    .command("search <query>")
+    .description("Full-text search across the work graph")
+    .option("--project <name>", "Limit to a project")
+    .action((query, options) => {
+        const causal = require("../core/memory/causal");
+        const rows = causal.search(query, { project: options.project, limit: 20 });
+        if (!rows.length) return console.log("No matches.");
+        for (const r of rows) console.log(`[${r.type}] ${r.label} (${r.ts.slice(0, 16)})`);
+    });
+
+graphCmd
+    .command("ask <question>")
+    .description("Natural-language query against the graph (LLM → SQL)")
+    .action(async (question) => {
+        const causal = require("../core/memory/causal");
+        try {
+            const { sql, rows } = await causal.askGraph(question, {
+                project: getProjectName(),
+            });
+            console.log(`\nSQL: ${sql}\n`);
+            if (!rows.length) return console.log("(no rows)");
+            for (const r of rows.slice(0, 20)) {
+                console.log(JSON.stringify(r, null, 0));
+            }
+        } catch (e) {
+            console.error("Graph query failed:", e.message);
+            process.exit(1);
+        }
+    });
+
+// ============================================
+// ai stats — Observability
+// ============================================
+program
+    .command("stats")
+    .description("LLM call telemetry: cost, latency, routing")
+    .option("--days <n>", "Window in days", "7")
+    .option("--project <name>", "Limit to a project")
+    .option("--recent <n>", "Show the last N calls", "0")
+    .action((options) => {
+        const obs = require("../core/obs/tracker");
+        const days = parseInt(options.days) || 7;
+        const project = options.project || null;
+
+        if (parseInt(options.recent) > 0) {
+            const rows = obs.recent(parseInt(options.recent), project);
+            for (const r of rows) {
+                console.log(
+                    `${r.ts.slice(0, 19)} | ${(r.route || "").padEnd(14)} | ` +
+                    `${(r.model || "").padEnd(18)} | ${String(r.latency_ms).padStart(6)}ms | ` +
+                    `$${(r.cost_usd || 0).toFixed(5)} | ${r.success ? "✓" : "✗"}`
+                );
+            }
+            return;
+        }
+
+        const s = obs.summary({ days, project });
+        console.log(`\n═══ LLM telemetry (last ${days}d${project ? ` · ${project}` : ""}) ═══`);
+        console.log(`Calls:       ${s.totals.calls || 0}`);
+        console.log(`Tokens:      ${s.totals.tokens || 0}`);
+        console.log(`Cost:        $${(s.totals.cost || 0).toFixed(4)}`);
+        console.log(`Avg latency: ${Math.round(s.totals.avg_latency || 0)}ms`);
+        console.log(`Failures:    ${s.totals.failures || 0}`);
+        console.log("\nBy route:");
+        for (const r of s.byRoute) console.log(`  ${r.route.padEnd(14)} ${String(r.calls).padStart(5)} calls   $${(r.cost || 0).toFixed(4)}`);
+        console.log("\nBy model:");
+        for (const r of s.byModel) console.log(`  ${(r.model || "?").padEnd(22)} ${String(r.calls).padStart(5)} calls   ${r.tokens || 0} tok   $${(r.cost || 0).toFixed(4)}`);
+        console.log("\nBy day:");
+        for (const r of s.byDay) console.log(`  ${r.day}   ${String(r.calls).padStart(5)} calls   $${(r.cost || 0).toFixed(4)}`);
+    });
+
+// ============================================
+// ai review — Multi-agent code review
+// ============================================
+program
+    .command("review")
+    .description("Run reviewer + tester + docsmith in parallel on the current diff")
+    .option("-t, --target <ref>", "Diff target (default: HEAD)", "HEAD")
+    .action(async (options) => {
+        const review = require("../core/agent/review");
+        console.log(`\n🔎 Reviewing vs ${options.target}…\n`);
+        const t0 = Date.now();
+        const result = await review.run({ target: options.target });
+        console.log(result.report);
+        console.log(`\n(elapsed ${result.elapsed_ms || Date.now() - t0}ms)`);
+    });
+
+// ============================================
+// ai suggest — Preference learning feedback
+// ============================================
+const suggestCmd = program.command("suggest").description("Manage suggestion feedback");
+
+suggestCmd
+    .command("feedback <id> <verdict> [reason...]")
+    .description("Record accept|reject on a suggestion id (shown after `ai ask --agent`)")
+    .action((id, verdict, reason) => {
+        const pref = require("../core/agent/preferences");
+        try {
+            pref.recordFeedback(id, verdict, (reason || []).join(" "));
+            const s = pref.stats();
+            console.log(`Recorded. Totals: ${s.accepted} accepted, ${s.rejected} rejected (${s.dpoPairs} DPO pairs).`);
+        } catch (e) {
+            console.error(e.message);
+            process.exit(1);
+        }
+    });
+
+suggestCmd
+    .command("stats")
+    .description("Preference learning stats")
+    .action(() => {
+        const pref = require("../core/agent/preferences");
+        console.log(JSON.stringify(pref.stats(), null, 2));
+    });
+
+suggestCmd
+    .command("export")
+    .description("Export DPO-style (chosen, rejected) pairs as JSONL")
+    .action(() => {
+        const pref = require("../core/agent/preferences");
+        for (const p of pref.exportPairs()) console.log(JSON.stringify(p));
+    });
+
+// ============================================
+// ai plugin — Plugin system
+// ============================================
+const pluginCmd = program.command("plugin").description("Manage agent plugins");
+
+pluginCmd
+    .command("list")
+    .description("List installed plugins")
+    .action(() => {
+        const loader = require("../core/plugins/loader");
+        const plugins = loader.list();
+        if (!plugins.length) {
+            console.log("No plugins installed.");
+            console.log(`\nInstall by dropping a .js file into: ${loader.USER_PLUGIN_DIR}`);
+            console.log("Or scaffold one with: ai plugin scaffold <name>");
+            return;
+        }
+        for (const p of plugins) {
+            console.log(`\n📦 ${p.name} v${p.version}`);
+            console.log(`   file:   ${p.file}`);
+            if (p.tools.length) console.log(`   tools:  ${p.tools.join(", ")}`);
+            if (p.hasMemory)    console.log(`   memory: yes`);
+            if (p.hooks.length) console.log(`   hooks:  ${p.hooks.join(", ")}`);
+        }
+    });
+
+pluginCmd
+    .command("scaffold <name>")
+    .description("Create a starter plugin file")
+    .action((name) => {
+        const loader = require("../core/plugins/loader");
+        try {
+            const file = loader.scaffold(name);
+            console.log(`Created ${file}`);
+        } catch (e) {
+            console.error(e.message);
+            process.exit(1);
+        }
     });
 
 program.parse(process.argv);

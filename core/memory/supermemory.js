@@ -9,14 +9,17 @@ const Supermemory = require("supermemory").default;
 
 // Lazy-loaded client instance
 let client = null;
+let clientApiKey = null;
 
 /**
- * Get or create the Supermemory client
+ * Get or create the Supermemory client; recreates if the API key changed
  * @param {string} apiKey
  */
 function getClient(apiKey) {
-    if (!client && apiKey) {
+    if (!apiKey) return null;
+    if (!client || clientApiKey !== apiKey) {
         client = new Supermemory({ apiKey });
+        clientApiKey = apiKey;
     }
     return client;
 }
@@ -115,6 +118,7 @@ function formatForPrompt(results) {
  */
 function reset() {
     client = null;
+    clientApiKey = null;
 }
 
 module.exports = {

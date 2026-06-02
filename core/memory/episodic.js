@@ -38,11 +38,13 @@ function load() {
 }
 
 /**
- * Save episodic memory
+ * Save episodic memory (atomic write to avoid corruption on crash)
  */
 function save(data) {
     ensureFile();
-    fs.writeFileSync(EPISODIC_FILE, JSON.stringify(data, null, 2));
+    const tmp = EPISODIC_FILE + ".tmp";
+    fs.writeFileSync(tmp, JSON.stringify(data, null, 2));
+    fs.renameSync(tmp, EPISODIC_FILE);
 }
 
 /**
@@ -185,7 +187,7 @@ function formatEditorEvent(event) {
  */
 function getStats() {
     const data = load();
-    const projects = [...new Set(data.events.map((e) => e.project))];
+    const projects = [...new Set(data.events.map((e) => e.project).filter(Boolean))];
     const errors = data.events.filter((e) => e.exitCode !== 0).length;
 
     return {

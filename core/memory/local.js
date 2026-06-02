@@ -22,14 +22,20 @@ function ensureMemoryFile() {
 // Load all memory from disk
 function loadMemory() {
     ensureMemoryFile();
-    const raw = fs.readFileSync(MEMORY_FILE, "utf-8");
-    return JSON.parse(raw);
+    try {
+        const raw = fs.readFileSync(MEMORY_FILE, "utf-8");
+        return JSON.parse(raw);
+    } catch {
+        return {};
+    }
 }
 
-// Save memory to disk
+// Save memory to disk (atomic write to avoid corruption on crash)
 function saveMemory(memory) {
     ensureMemoryFile();
-    fs.writeFileSync(MEMORY_FILE, JSON.stringify(memory, null, 2));
+    const tmp = MEMORY_FILE + ".tmp";
+    fs.writeFileSync(tmp, JSON.stringify(memory, null, 2));
+    fs.renameSync(tmp, MEMORY_FILE);
 }
 
 /**

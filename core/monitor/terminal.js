@@ -32,6 +32,25 @@ async function logEvent(event) {
     // 1. Store raw event in episodic memory (short-term)
     await episodic.add(entry);
 
+    // 1b. Mirror to causal graph (non-blocking)
+    try {
+        const causal = require("../memory/causal");
+        if (isGitCommit(entry.command) && entry.exitCode === 0) {
+            causal.recordCommit({
+                project: entry.project,
+                hash: null,
+                message: extractCommitMessage(entry.command) || entry.command,
+            });
+        } else {
+            causal.recordCommand({
+                project: entry.project,
+                command: entry.command,
+                exitCode: entry.exitCode,
+                cwd: entry.cwd,
+            });
+        }
+    } catch (e) { /* ignore */ }
+
     // 2. Special handling for git commits - capture the diff
     if (isGitCommit(entry.command) && entry.exitCode === 0) {
         await gitmonitor.captureCommit(entry.cwd, extractCommitMessage(entry.command));

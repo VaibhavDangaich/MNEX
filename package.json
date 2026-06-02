@@ -1,17 +1,17 @@
 {
-  "name": "@vaibhav_dangaich/ai-agent",
-  "version": "1.1.1",
+  "name": "@vaibhav_dangaich/mnex",
+  "version": "1.5.0",
   "bin": {
-    "ai": "bin/ai.js",
-    "ai-agent": "bin/ai.js"
+    "mnex": "bin/ai.js"
   },
-  "description": "Context-aware AI CLI agent with persistent memory - your digital cognitive layer that remembers everything you do",
+  "description": "mnex — cognitive-architecture AI coding agent with stateful LangGraph planner-critic loop, 5-tier memory, causal work graph, local-first routing, GitHub integration, eval harness, and plugin SDK",
   "main": "bin/ai.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
     "postinstall": "node scripts/postinstall.js"
   },
   "keywords": [
+    "mnex",
     "ai",
     "cli",
     "agent",
@@ -23,7 +23,19 @@
     "terminal",
     "productivity",
     "developer-tools",
-    "supermemory"
+    "supermemory",
+    "langchain",
+    "langgraph",
+    "ollama",
+    "local-llm",
+    "causal-graph",
+    "sqlite",
+    "cognitive-architecture",
+    "coding-agent",
+    "github",
+    "eval",
+    "plugin-sdk",
+    "code-review"
   ],
   "author": "Vaibhav Dangaich",
   "license": "MIT",
@@ -50,9 +62,11 @@
   ],
   "type": "commonjs",
   "dependencies": {
-    "@langchain/core": "^1.1.18",
+    "@langchain/core": "^1.1.41",
     "@langchain/google-genai": "^2.1.14",
+    "@langchain/langgraph": "^1.2.9",
     "@langchain/openai": "^1.2.4",
+    "better-sqlite3": "^12.9.0",
     "chokidar": "^5.0.0",
     "commander": "^14.0.3",
     "dotenv": "^17.2.3",

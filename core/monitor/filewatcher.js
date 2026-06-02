@@ -7,12 +7,17 @@
 const chokidar = require("chokidar");
 const path = require("path");
 const fs = require("fs");
+const os = require("os");
 const episodic = require("../memory/episodic");
 const working = require("../memory/working");
 const config = require("../config");
 
 let watcher = null;
 let isRunning = false;
+let currentFocus = null; // Track the currently focused file/project
+
+const HOME = os.homedir();
+const FOCUS_FILE = path.join(HOME, ".config", "ai-agent", "focus.json");
 
 // Patterns to ignore
 const IGNORE_PATTERNS = [
@@ -27,6 +32,14 @@ const IGNORE_PATTERNS = [
     "**/package-lock.json",
     "**/yarn.lock",
     "**/pnpm-lock.yaml",
+    "**/venv/**",
+    "**/.venv/**",
+    "**/env/**",
+    "**/__pycache__/**",
+    "**/.cache/**",
+    "**/Library/**",
+    "**/Applications/**",
+    "**/.Trash/**",
 ];
 
 // File extensions to track
@@ -76,6 +89,14 @@ async function logFileEvent(action, filePath) {
     const relativePath = path.basename(filePath);
     const ext = path.extname(filePath);
 
+    // Auto-update focus when a file is edited
+    if (action === "save") {
+        setFocus(filePath, project);
+    }
+
+    // Check if this file is in the focused project (for notifications)
+    const isFocused = isInFocusedProject(filePath);
+
     const event = {
         type: "editor",
         action,
@@ -83,10 +104,17 @@ async function logFileEvent(action, filePath) {
         fullPath: filePath,
         extension: ext,
         project,
+        isFocused,
         timestamp: new Date().toISOString(),
     };
 
     await episodic.add(event);
+
+    // Mirror to causal graph (best-effort, non-blocking)
+    try {
+        const causal = require("../memory/causal");
+        causal.recordEdit({ project, file: relativePath, action });
+    } catch (e) { /* ignore */ }
 
     // Update working memory with recent file
     await working.update(project, {
@@ -98,7 +126,17 @@ async function logFileEvent(action, filePath) {
     syncToCloud(project, action, event).catch(() => {});
 
     if (config.get("debug")) {
-        console.log(`[watch] ${action}: ${relativePath}`);
+        console.log(`[watch] ${action}: ${relativePath}${isFocused ? " (focused)" : ""}`);
+    }
+
+    // Call external change handler if set
+    if (module.exports.onFileChange) {
+        try {
+            const content = fs.readFileSync(filePath, "utf-8");
+            await module.exports.onFileChange(filePath, content, action, { isFocused, project });
+        } catch (e) {
+            // Ignore read errors
+        }
     }
 }
 
@@ -134,7 +172,8 @@ function start(watchPath, options = {}) {
 
     console.log(`🔍 Watching: ${resolvedPath}`);
 
-    watcher = chokidar.watch(resolvedPath, {
+    // Smart options for watching large directories
+    const watchOptions = {
         ignored: IGNORE_PATTERNS,
         persistent: true,
         ignoreInitial: true,
@@ -142,15 +181,37 @@ function start(watchPath, options = {}) {
             stabilityThreshold: 300,
             pollInterval: 100,
         },
+        // Limit depth to prevent EMFILE errors on large directories
+        depth: options.depth !== undefined ? options.depth : 10,
+        // Use polling for very large directories (slower but safer)
+        usePolling: options.usePolling || false,
+        interval: 1000,
+        // Ignore permission errors
+        ignorePermissionErrors: true,
         ...options,
-    });
+    };
+
+    watcher = chokidar.watch(resolvedPath, watchOptions);
 
     // File events
     watcher
         .on("add", (filePath) => logFileEvent("create", filePath))
         .on("change", (filePath) => logFileEvent("save", filePath))
         .on("unlink", (filePath) => logFileEvent("delete", filePath))
-        .on("error", (error) => console.error("Watcher error:", error));
+        .on("error", (error) => {
+            // Handle EMFILE gracefully
+            if (error.code === "EMFILE") {
+                console.error("Too many files being watched. Switching to polling mode...");
+                // Restart with polling
+                stop().then(() => {
+                    setTimeout(() => {
+                        start(watchPath, { ...options, usePolling: true, depth: 5 });
+                    }, 1000);
+                });
+            } else {
+                console.error("Watcher error:", error);
+            }
+        });
 
     isRunning = true;
 
@@ -184,10 +245,69 @@ function getWatched() {
     return watcher.getWatched();
 }
 
+/**
+ * Set the currently focused file/project
+ * This is called when user opens a file or terminal changes directory
+ */
+function setFocus(filePath, project = null) {
+    currentFocus = {
+        file: filePath,
+        project: project || detectProject(filePath),
+        timestamp: new Date().toISOString(),
+    };
+
+    // Persist focus to file for cross-process access
+    try {
+        const dir = path.dirname(FOCUS_FILE);
+        if (!fs.existsSync(dir)) {
+            fs.mkdirSync(dir, { recursive: true });
+        }
+        fs.writeFileSync(FOCUS_FILE, JSON.stringify(currentFocus, null, 2));
+    } catch (e) {
+        // Ignore write errors
+    }
+
+    return currentFocus;
+}
+
+/**
+ * Get the currently focused file/project
+ */
+function getFocus() {
+    // Try to read from file first (for cross-process)
+    try {
+        if (fs.existsSync(FOCUS_FILE)) {
+            const data = JSON.parse(fs.readFileSync(FOCUS_FILE, "utf-8"));
+            // Check if focus is recent (within 1 hour)
+            const focusTime = new Date(data.timestamp).getTime();
+            if (Date.now() - focusTime < 3600000) {
+                return data;
+            }
+        }
+    } catch (e) {
+        // Ignore read errors
+    }
+    return currentFocus;
+}
+
+/**
+ * Check if a file is in the currently focused project
+ */
+function isInFocusedProject(filePath) {
+    const focus = getFocus();
+    if (!focus || !focus.project) return true; // If no focus, consider everything focused
+    
+    const fileProject = detectProject(filePath);
+    return fileProject === focus.project;
+}
+
 module.exports = {
     start,
     stop,
     isWatching,
     getWatched,
     detectProject,
+    setFocus,
+    getFocus,
+    isInFocusedProject,
 };
