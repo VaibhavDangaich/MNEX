@@ -41,12 +41,12 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/VaibhavDangaich/cli_agent.git"
+    "url": "git+https://github.com/VaibhavDangaich/mnex.git"
   },
   "bugs": {
-    "url": "https://github.com/VaibhavDangaich/cli_agent/issues"
+    "url": "https://github.com/VaibhavDangaich/mnex/issues"
   },
-  "homepage": "https://github.com/VaibhavDangaich/cli_agent#readme",
+  "homepage": "https://github.com/VaibhavDangaich/mnex#readme",
   "engines": {
     "node": ">=18.0.0"
   },
@@ -61,6 +61,9 @@
     ".env.example"
   ],
   "type": "commonjs",
+  "publishConfig": {
+    "access": "public"
+  },
   "dependencies": {
     "@langchain/core": "^1.1.41",
     "@langchain/google-genai": "^2.1.14",
