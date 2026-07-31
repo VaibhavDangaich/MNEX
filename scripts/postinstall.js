@@ -19,7 +19,7 @@ const DIM = "\x1b[2m";
 const RESET = "\x1b[0m";
 
 const HOME = os.homedir();
-const CONFIG_DIR = path.join(HOME, ".config", "ai-agent");
+const CONFIG_DIR = require("../core/paths").CONFIG_DIR;
 const CONFIG_FILE = path.join(CONFIG_DIR, ".env");
 
 /**
@@ -68,15 +68,15 @@ ${CYAN}╚═══════════════════════�
         console.log(`${GREEN}✅ API keys already configured!${RESET}`);
         console.log(`   Config: ${CONFIG_FILE}\n`);
         console.log(`${BOLD}Get started:${RESET}`);
-        console.log(`   ${GREEN}ai ask "hello, what can you do?"${RESET}`);
-        console.log(`   ${GREEN}ai service start${RESET}  ${DIM}# Enable background monitoring${RESET}\n`);
+        console.log(`   ${GREEN}mnex ask "hello, what can you do?"${RESET}`);
+        console.log(`   ${GREEN}mnex service start${RESET}  ${DIM}# Enable background monitoring${RESET}\n`);
         return;
     }
 
     // Check if running in CI/non-interactive
     if (!process.stdin.isTTY) {
         console.log(`${YELLOW}⚠️  Non-interactive environment detected.${RESET}`);
-        console.log(`   Run ${GREEN}ai init${RESET} after installation to configure API keys.\n`);
+        console.log(`   Run ${GREEN}mnex init${RESET} after installation to configure API keys.\n`);
         return;
     }
 
@@ -92,7 +92,7 @@ ${CYAN}╚═══════════════════════�
         if (setupNow.toLowerCase() !== 'y' && setupNow.toLowerCase() !== 'yes') {
             console.log(`\n${YELLOW}⚠️  Setup skipped.${RESET}`);
             console.log(`   The agent will NOT work without API keys.`);
-            console.log(`   Run ${GREEN}ai init${RESET} to configure when ready.\n`);
+            console.log(`   Run ${GREEN}mnex init${RESET} to configure when ready.\n`);
             rl.close();
             return;
         }
@@ -121,7 +121,7 @@ ${CYAN}╚═══════════════════════�
 
         if (!apiKey) {
             console.log(`\n${RED}❌ No API key provided. Setup cancelled.${RESET}`);
-            console.log(`   Run ${GREEN}ai init${RESET} to try again.\n`);
+            console.log(`   Run ${GREEN}mnex init${RESET} to try again.\n`);
             rl.close();
             return;
         }
@@ -164,9 +164,9 @@ ${CYAN}╚═══════════════════════�
 
         // Show next steps
         console.log(`${BOLD}🎉 Setup Complete! Get started:${RESET}\n`);
-        console.log(`   ${GREEN}ai ask "hello, what can you do?"${RESET}  ${DIM}# Try it now${RESET}`);
-        console.log(`   ${GREEN}ai service start${RESET}                  ${DIM}# Enable monitoring${RESET}`);
-        console.log(`   ${GREEN}ai status${RESET}                         ${DIM}# See current context${RESET}\n`);
+        console.log(`   ${GREEN}mnex ask "hello, what can you do?"${RESET}  ${DIM}# Try it now${RESET}`);
+        console.log(`   ${GREEN}mnex service start${RESET}                  ${DIM}# Enable monitoring${RESET}`);
+        console.log(`   ${GREEN}mnex status${RESET}                         ${DIM}# See current context${RESET}\n`);
 
         if (supermemoryKey) {
             console.log(`${CYAN}☁️  Cloud sync enabled!${RESET} Your context syncs across devices.\n`);
@@ -176,7 +176,7 @@ ${CYAN}╚═══════════════════════�
 
     } catch (error) {
         console.error(`\n${RED}Error during setup:${RESET}`, error.message);
-        console.log(`Run ${GREEN}ai init${RESET} to try again.\n`);
+        console.log(`Run ${GREEN}mnex init${RESET} to try again.\n`);
         rl.close();
     }
 }

@@ -9,7 +9,7 @@ const os = require("os");
 const supermemory = require("../memory/supermemory");
 const config = require("../config");
 
-const REMINDERS_PATH = path.join(os.homedir(), ".config", "ai-agent", "reminders.json");
+const REMINDERS_PATH = require("../paths").configFile("reminders.json");
 
 /**
  * Load reminders

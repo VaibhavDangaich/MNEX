@@ -14,7 +14,7 @@ const fs = require("fs");
 const os = require("os");
 
 // Local cache for offline access
-const CACHE_PATH = path.join(os.homedir(), ".config", "ai-agent", "knowledge.json");
+const CACHE_PATH = require("../paths").configFile("knowledge.json");
 
 /**
  * Load local cache

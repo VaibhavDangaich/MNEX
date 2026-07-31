@@ -9,17 +9,14 @@ const path = require("path");
 const fs = require("fs");
 const os = require("os");
 
-// Load environment variables from multiple locations (priority order):
-// 1. Current working directory .env
-// 2. Home directory ~/.mnex.env
-// 3. Home directory ~/.config/mnex/.env
-// 4. Package directory .env (fallback for development)
+// Load environment variables. Search order (and the legacy fallbacks that keep
+// pre-rename installs working) is defined once in core/paths.js so the CLI and
+// the background daemon can never disagree about where the API key lives.
+const corePaths = require("../core/paths");
 
 const envPaths = [
-    path.join(process.cwd(), ".env"),
-    path.join(os.homedir(), ".mnex.env"),
-    path.join(os.homedir(), ".config", "mnex", ".env"),
-    path.join(__dirname, "../.env"),
+    ...corePaths.envCandidates(process.cwd()),
+    path.join(__dirname, "../.env"), // dev checkout fallback
 ];
 
 let envLoaded = false;
@@ -1839,7 +1836,7 @@ program
     .description("Show setup instructions for monitoring")
     .action(() => {
         const hookPath = path.join(__dirname, "../hooks/zsh-hook.sh");
-        const configFile = path.join(os.homedir(), ".config", "ai-agent", ".env");
+        const configFile = require("../core/paths").ENV_FILE;
 
         console.log("\n🔧 AI Agent Setup");
         console.log("─".repeat(40));

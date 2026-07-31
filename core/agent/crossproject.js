@@ -12,7 +12,7 @@ const config = require("../config");
 const { exec } = require("child_process");
 
 // Store project registry
-const REGISTRY_PATH = path.join(os.homedir(), ".config", "ai-agent", "projects.json");
+const REGISTRY_PATH = require("../paths").configFile("projects.json");
 
 /**
  * Load project registry

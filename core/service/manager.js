@@ -14,9 +14,11 @@ const os = require("os");
 const { exec, spawn } = require("child_process");
 
 const HOME = os.homedir();
-const CONFIG_DIR = path.join(HOME, ".config", "ai-agent");
+const paths = require("../paths");
+
+const CONFIG_DIR = paths.CONFIG_DIR;
 const ENV_FILE = path.join(CONFIG_DIR, ".env");
-const PLIST_NAME = "com.ai-agent.watcher.plist";
+const PLIST_NAME = paths.PLIST_NAME;
 const LAUNCH_AGENTS_DIR = path.join(HOME, "Library", "LaunchAgents");
 const PLIST_PATH = path.join(LAUNCH_AGENTS_DIR, PLIST_NAME);
 const LOG_PATH = path.join(CONFIG_DIR, "service.log");
@@ -31,7 +33,9 @@ function loadEnvFromConfig() {
     // Check multiple possible .env locations
     const envPaths = [
         ENV_FILE,
-        path.join(HOME, ".ai-agent.env"),
+        paths.HOME_ENV_FILE,
+        paths.LEGACY_HOME_ENV_FILE,
+        paths.LEGACY_ENV_FILE,
         path.join(process.cwd(), ".env"),
     ];
 
@@ -118,12 +122,17 @@ function maskKey(value) {
  * Get the path to the ai.js binary
  */
 function getAIPath() {
-    // First check if we're running from npm global
+    // This module ships inside the package, so its own location always resolves
+    // to the running install — global, npx, or a dev checkout. Prefer it over
+    // guessing prefixes. (The previous order guessed "/usr/local" and the
+    // pre-rename package name "@vaibhav_dangaich/ai-agent", so on a Homebrew
+    // Node the daemon resolved a path that does not exist.)
     const npmGlobal = process.env.npm_config_prefix || "/usr/local";
+    const PKG = "@vaibhav_dangaich";
     const possiblePaths = [
-        path.join(npmGlobal, "lib", "node_modules", "@vaibhav_dangaich", "ai-agent", "bin", "ai.js"),
-        path.join(HOME, ".npm-global", "lib", "node_modules", "@vaibhav_dangaich", "ai-agent", "bin", "ai.js"),
-        path.join(__dirname, "..", "bin", "ai.js"),
+        path.resolve(__dirname, "..", "..", "bin", "ai.js"),
+        path.join(npmGlobal, "lib", "node_modules", PKG, "mnex", "bin", "ai.js"),
+        path.join(HOME, ".npm-global", "lib", "node_modules", PKG, "mnex", "bin", "ai.js"),
         // For local development
         path.join(process.cwd(), "bin", "ai.js"),
     ];
@@ -199,7 +208,7 @@ function generatePlist(watchPaths = [], envVars = {}) {
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>com.ai-agent.watcher</string>
+    <string>${paths.PLIST_LABEL}</string>
     
     <key>ProgramArguments</key>
     <array>
@@ -295,8 +304,8 @@ async function stopService() {
  */
 async function isServiceRunning() {
     return new Promise((resolve) => {
-        exec(`launchctl list | grep com.ai-agent`, (err, stdout) => {
-            resolve(!err && stdout.includes("com.ai-agent"));
+        exec(`launchctl list | grep ${paths.PLIST_LABEL}`, (err, stdout) => {
+            resolve(!err && stdout.includes(paths.PLIST_LABEL));
         });
     });
 }
@@ -336,7 +345,9 @@ async function isZshHookInstalled() {
     if (!fs.existsSync(zshrcPath)) return false;
 
     const content = fs.readFileSync(zshrcPath, "utf-8");
-    return content.includes("ai-agent") || content.includes("zsh-hook.sh");
+    // Match the current marker and the pre-rename one, so `service status` and
+    // `service stop` still see hooks installed by older versions.
+    return content.includes("mnex") || content.includes("ai-agent") || content.includes("zsh-hook.sh");
 }
 
 /**

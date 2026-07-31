@@ -17,7 +17,7 @@ let isRunning = false;
 let currentFocus = null; // Track the currently focused file/project
 
 const HOME = os.homedir();
-const FOCUS_FILE = path.join(HOME, ".config", "ai-agent", "focus.json");
+const FOCUS_FILE = require("../paths").configFile("focus.json");
 
 // Patterns to ignore
 const IGNORE_PATTERNS = [

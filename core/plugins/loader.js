@@ -1,9 +1,10 @@
 /**
  * Plugin Loader
  *
- * Discovers plugins from two places:
- *   1. ~/.ai-agent/plugins/*.js   (user plugins)
- *   2. ./plugins/*.js             (project-local plugins)
+ * Discovers plugins from:
+ *   1. ~/.mnex/plugins/*.js       (user plugins)
+ *   2. ~/.ai-agent/plugins/*.js   (legacy, pre-rename — still loaded)
+ *   3. ./plugins/*.js             (project-local plugins)
  *
  * Each plugin is a CommonJS module exporting:
  *   module.exports = {
@@ -29,13 +30,15 @@ const fs = require("fs");
 const path = require("path");
 const os = require("os");
 
-const USER_PLUGIN_DIR = path.join(os.homedir(), ".ai-agent", "plugins");
+const paths = require("../paths");
+
+const USER_PLUGIN_DIR = paths.PLUGIN_DIR;
 const LOCAL_PLUGIN_DIR = path.join(process.cwd(), "plugins");
 
 let loaded = null;
 
 function discover() {
-    const dirs = [USER_PLUGIN_DIR, LOCAL_PLUGIN_DIR];
+    const dirs = paths.pluginDirs();
     const files = [];
     for (const dir of dirs) {
         if (!fs.existsSync(dir)) continue;

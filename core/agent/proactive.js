@@ -549,7 +549,7 @@ function sendErrorNotification(errors, filePath) {
     }
     
     // Store errors for click action
-    const errorStorePath = path.join(os.homedir(), ".config", "ai-agent", "last-errors.json");
+    const errorStorePath = require("../paths").configFile("last-errors.json");
     try {
         const dir = path.dirname(errorStorePath);
         if (!fs.existsSync(dir)) {
@@ -608,7 +608,7 @@ function sendErrorNotification(errors, filePath) {
  * Show the last stored errors (for notification click action)
  */
 function showLastErrors() {
-    const errorStorePath = path.join(os.homedir(), ".config", "ai-agent", "last-errors.json");
+    const errorStorePath = require("../paths").configFile("last-errors.json");
     
     try {
         if (!fs.existsSync(errorStorePath)) {
