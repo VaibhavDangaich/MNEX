@@ -70,7 +70,7 @@
     "@langchain/langgraph": "^1.2.9",
     "@langchain/openai": "^1.2.4",
     "better-sqlite3": "^12.9.0",
-    "chokidar": "^5.0.0",
+    "chokidar": "^4.0.3",
     "commander": "^14.0.3",
     "dotenv": "^17.2.3",
     "langchain": "^1.2.16",

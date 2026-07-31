@@ -19,28 +19,38 @@ let currentFocus = null; // Track the currently focused file/project
 const HOME = os.homedir();
 const FOCUS_FILE = require("../paths").configFile("focus.json");
 
-// Patterns to ignore
-const IGNORE_PATTERNS = [
-    "**/node_modules/**",
-    "**/.git/**",
-    "**/dist/**",
-    "**/build/**",
-    "**/.next/**",
-    "**/coverage/**",
-    "**/*.log",
-    "**/.DS_Store",
-    "**/package-lock.json",
-    "**/yarn.lock",
-    "**/pnpm-lock.yaml",
-    "**/venv/**",
-    "**/.venv/**",
-    "**/env/**",
-    "**/__pycache__/**",
-    "**/.cache/**",
-    "**/Library/**",
-    "**/Applications/**",
-    "**/.Trash/**",
+/**
+ * Directories that must never be descended into, and file names never reported.
+ *
+ * These were previously expressed as glob strings ("**\/node_modules\/**").
+ * chokidar removed glob support from `ignored` in v4 — a glob string is now
+ * matched literally, so every one of these silently stopped matching and the
+ * watcher walked straight into node_modules, .git and virtualenvs. On a typical
+ * JS project that is the overwhelming majority of the directory tree, so it cost
+ * both memory and file descriptors on every watched project.
+ *
+ * `ignored` is now a predicate, which is what v4+ actually honours. See
+ * test/filewatcher.test.js, which asserts node_modules is not watched.
+ */
+const IGNORED_DIRS = [
+    "node_modules", ".git", "dist", "build", ".next", "coverage",
+    "venv", ".venv", "env", "__pycache__", ".cache", "Library",
+    ".terraform", ".gradle", "target", "vendor", ".pytest_cache", ".mypy_cache",
+    "Applications", ".Trash",
 ];
+
+const IGNORED_FILE_RE = /(\.log|\.DS_Store|package-lock\.json|yarn\.lock|pnpm-lock\.yaml)$/;
+
+const IGNORED_DIR_RE = new RegExp(
+    `(^|[/\\\\])(${IGNORED_DIRS.map((d) => d.replace(/\./g, "\\.")).join("|")})([/\\\\]|$)`
+);
+
+/** chokidar v4+ `ignored` predicate. Exported so tests can assert on it. */
+function isIgnored(targetPath) {
+    if (IGNORED_DIR_RE.test(targetPath)) return true;
+    return IGNORED_FILE_RE.test(targetPath);
+}
+
 
 // File extensions to track
 const TRACKED_EXTENSIONS = [
@@ -174,7 +184,7 @@ function start(watchPath, options = {}) {
 
     // Smart options for watching large directories
     const watchOptions = {
-        ignored: IGNORE_PATTERNS,
+        ignored: isIgnored,
         persistent: true,
         ignoreInitial: true,
         awaitWriteFinish: {
@@ -310,4 +320,6 @@ module.exports = {
     setFocus,
     getFocus,
     isInFocusedProject,
+    isIgnored,
+    IGNORED_DIRS,
 };
