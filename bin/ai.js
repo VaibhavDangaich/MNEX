@@ -35,11 +35,43 @@ if (!envLoaded && !process.env.OPENAI_API_KEY && !process.env.GEMINI_API_KEY) {
 
 const { Command } = require("commander");
 const { getGitContext } = require("../core/context");
-const memory = require("../core/memory");
-const conversation = require("../core/memory/conversation");
-const { formatForDisplay, getMessages } = require("../core/prompt");
-const llm = require("../core/llm");
-const terminal = require("../core/monitor/terminal");
+
+/**
+ * Defer a module until something actually touches it.
+ *
+ * The zsh hook runs `mnex log` after every shell command, and `mnex status`,
+ * `mnex remember` and friends are typed constantly. Loading these eagerly meant
+ * every one of those invocations paid for the whole LangChain import graph:
+ * core/prompt alone is ~214ms and ~24MB RSS, and none of it is reached on those
+ * paths. Requiring on first property access keeps the cost with the commands
+ * that genuinely need a model.
+ */
+function lazy(id) {
+    let mod;
+    const load = () => (mod ??= require(id));
+    return new Proxy(Object.create(null), {
+        get: (_t, prop) => {
+            const m = load();
+            const v = m[prop];
+            return typeof v === "function" ? v.bind(m) : v;
+        },
+        has: (_t, prop) => prop in load(),
+        ownKeys: () => Reflect.ownKeys(load()),
+        getOwnPropertyDescriptor: (_t, prop) =>
+            Object.getOwnPropertyDescriptor(load(), prop) ?? {
+                configurable: true, enumerable: true, value: load()[prop],
+            },
+    });
+}
+
+const memory = lazy("../core/memory");
+const conversation = lazy("../core/memory/conversation");
+const llm = lazy("../core/llm");
+const terminal = lazy("../core/monitor/terminal");
+
+// Destructured bindings cannot be deferred, so wrap them instead.
+const formatForDisplay = (...a) => require("../core/prompt").formatForDisplay(...a);
+const getMessages = (...a) => require("../core/prompt").getMessages(...a);
 
 const program = new Command();
 

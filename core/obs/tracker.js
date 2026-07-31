@@ -33,6 +33,13 @@ function getDb() {
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
     db = new Database(DB_FILE);
     db.pragma("journal_mode = WAL");
+    // WAL alone still allows one writer at a time. The CLI and the background
+    // watcher both open these databases, so without a busy timeout a collision
+    // surfaces as SQLITE_BUSY instead of a short wait. journal_size_limit keeps
+    // the -wal file from growing without bound over a long daemon uptime.
+    db.pragma("busy_timeout = 5000");
+    db.pragma("synchronous = NORMAL");
+    db.pragma("journal_size_limit = 6291456");
     db.exec(`
         CREATE TABLE IF NOT EXISTS llm_calls (
             id INTEGER PRIMARY KEY AUTOINCREMENT,

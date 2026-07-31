@@ -5,7 +5,10 @@
 
 const fs = require("fs");
 const path = require("path");
-const { extractContext } = require("./extractor");
+// extractor pulls in @langchain/core (~125ms, ~22MB RSS). It is only reached on
+// the one async path below that actually summarises an event, but this module is
+// loaded by `mnex log`, which the zsh hook runs after *every* shell command.
+// Requiring it lazily keeps that hot path off the LangChain import graph.
 const episodic = require("../memory/episodic");
 const working = require("../memory/working");
 const gitmonitor = require("./gitmonitor");
@@ -129,6 +132,7 @@ function shouldProcess(entry) {
 async function processEvent(entry) {
     try {
         // Extract semantic meaning using LLM
+        const { extractContext } = require("./extractor");
         const context = await extractContext(entry);
 
         if (context) {
