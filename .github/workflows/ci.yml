@@ -30,8 +30,17 @@ jobs:
       # `npm ci` fails on a lockfile that disagrees with package.json, so this
       # step also guards against the stale-lockfile breakage that previously
       # made a fresh clone uninstallable.
+      #
+      # --ignore-scripts skips this package's own postinstall (an interactive
+      # setup helper that has no business running in CI), but it also skips
+      # better-sqlite3's prebuild step, leaving the native binding unbuilt and
+      # every SQLite-backed test failing with "Could not locate the bindings
+      # file". Rebuilding just that dependency restores it.
       - name: Install
         run: npm ci --ignore-scripts
+
+      - name: Build native dependencies
+        run: npm rebuild better-sqlite3
 
       - name: Unit tests
         run: npm test
