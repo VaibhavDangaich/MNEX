@@ -46,7 +46,10 @@ const program = new Command();
 program
     .name("mnex")
     .description("mnex — cognitive-architecture AI coding agent with persistent memory")
-    .version("1.5.0");
+    // Read from package.json rather than a literal — the hardcoded string had
+    // already drifted a patch release behind (reported 1.5.0 while the package
+    // was 1.5.1), which makes bug reports point at the wrong version.
+    .version(require("../package.json").version);
 
 /**
  * Helper to get project name (returns null if not in a real project)
@@ -839,6 +842,7 @@ program
     .option("--repo <repo>", "Index a specific repo (owner/name)")
     .option("-n, --max <number>", "Max repos to index", "10")
     .option("--starred", "Include starred repos")
+    .option("--resume", "Resume the last interrupted index instead of starting over")
     .action(async (options) => {
         const github = require("../core/integrations/github");
         const config = require("../core/config");
@@ -903,22 +907,34 @@ program
             }
 
             // Full index
-            if (options.index) {
+            if (options.index || options.resume) {
                 console.log("📥 Starting GitHub indexing...");
                 console.log(`   Max repos: ${options.max}`);
-                console.log(`   Include starred: ${options.starred ? "yes" : "no"}\n`);
+                console.log(`   Include starred: ${options.starred ? "yes" : "no"}`);
+                console.log(`   Durable: every repo is a checkpointed step; ^C is safe\n`);
 
-                const result = await github.indexUserGitHub(githubToken, supermemoryKey, {
+                const result = await github.indexUserGitHubDurable(githubToken, supermemoryKey, {
                     maxRepos: parseInt(options.max),
                     includeStarred: options.starred,
+                    resume: Boolean(options.resume),
+                    onProgress: ({ completed, skipped, failed, total, name }) => {
+                        const done = completed + skipped + failed;
+                        const tag = skipped && name ? " (already done, skipped)" : "";
+                        console.log(`   [${done}/${total}] ${name}${tag}`);
+                    },
+                    onRetry: ({ stepName, attempt, delay }) => {
+                        console.log(`   ↻ ${stepName}: attempt ${attempt + 1} failed, retrying in ${Math.round(delay / 1000)}s`);
+                    },
                 });
 
                 console.log("\n" + "─".repeat(40));
                 console.log(`✅ GitHub Indexing Complete!`);
-                console.log(`   📦 Repos indexed: ${result.repos}`);
-                console.log(`   📄 Total items: ${result.items}`);
-                if (result.errors.length > 0) {
-                    console.log(`   ⚠️  Errors: ${result.errors.length}`);
+                console.log(`   run id:          ${result.runId}`);
+                console.log(`   📦 newly indexed: ${result.completed}`);
+                console.log(`   ⏭️  skipped:       ${result.skipped} (already done in a previous run)`);
+                if (result.failed > 0) {
+                    console.log(`   ⚠️  failed:        ${result.failed}`);
+                    console.log(`   Re-run with: mnex github --resume`);
                 }
                 console.log("\n🧠 Your GitHub knowledge is now in your AI's memory!");
                 console.log('   Try: mnex ask "what projects am I working on?"\n');
@@ -2121,6 +2137,82 @@ pluginCmd
             console.error(e.message);
             process.exit(1);
         }
+    });
+
+// ============================================
+// WORKFLOW — inspect and resume durable runs
+// ============================================
+program
+    .command("workflow [action]")
+    .description("Inspect durable runs: list | show <id> | resume | prune")
+    .option("--id <runId>", "Target a specific run")
+    .option("--days <n>", "Retention window for prune", "30")
+    .option("--json", "Machine-readable output")
+    .action(async (action = "list", options) => {
+        const engine = require("../core/orchestration/engine");
+
+        if (action === "prune") {
+            const res = engine.prune({ days: parseInt(options.days) });
+            console.log(`\n🧹 Pruned ${res.runs} finished run(s), ${res.steps} step(s).\n`);
+            return;
+        }
+
+        if (action === "show") {
+            const runId = options.id;
+            if (!runId) return console.log("Usage: mnex workflow show --id <runId>");
+            const run = engine.getRun(runId);
+            if (!run) return console.log(`No such run: ${runId}`);
+            const steps = engine.getSteps(runId);
+
+            if (options.json) {
+                console.log(JSON.stringify({ run, steps }, null, 2));
+                return;
+            }
+            console.log(`\n🔁 ${run.workflow}  ${run.run_id}   [${run.status}]`);
+            console.log("─".repeat(60));
+            for (const s of steps) {
+                const icon = { done: "✅", failed: "❌", in_flight: "⏳", pending: "•" }[s.status] || "•";
+                const attempts = s.attempt > 0 ? `  (attempt ${s.attempt + 1})` : "";
+                console.log(`${icon} ${s.step_name}${attempts}`);
+                if (s.error) console.log(`     ${s.error.split("\n")[0].slice(0, 100)}`);
+            }
+            console.log("");
+            return;
+        }
+
+        if (action === "resume") {
+            // Resuming is workflow-specific; point at the command that owns it
+            // rather than guessing how to rebuild the unit list here.
+            const run = options.id ? engine.getRun(options.id) : engine.findResumableRun("github-index");
+            if (!run) return console.log("\nNothing to resume.\n");
+            console.log(`\nInterrupted run: ${run.run_id} (${run.workflow})`);
+            const p = engine.runProgress(run.run_id);
+            console.log(`Progress: ${p.done} done, ${p.failed} failed, ${p.total} recorded`);
+            console.log(`\nResume it with:\n   mnex github --resume\n`);
+            return;
+        }
+
+        // default: list
+        const runs = engine.listRuns({ limit: 20 });
+        if (options.json) {
+            console.log(JSON.stringify(runs, null, 2));
+            return;
+        }
+        if (!runs.length) {
+            console.log("\nNo durable runs recorded yet.");
+            console.log("Long operations such as `mnex github --index` create them.\n");
+            return;
+        }
+        console.log("\n🔁 Durable runs");
+        console.log("─".repeat(72));
+        for (const r of runs) {
+            const p = engine.runProgress(r.run_id);
+            const when = new Date(r.updated_at).toISOString().replace("T", " ").slice(0, 16);
+            const icon = { completed: "✅", failed: "❌", running: "⏳" }[r.status] || "•";
+            console.log(`${icon} ${r.run_id}  ${r.workflow.padEnd(16)} ${when}  ${p.done}/${p.total} steps`);
+        }
+        console.log("\nInspect one:  mnex workflow show --id <runId>");
+        console.log("Clean up:     mnex workflow prune --days 30\n");
     });
 
 program.parse(process.argv);

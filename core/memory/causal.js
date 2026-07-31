@@ -259,13 +259,7 @@ SQL:`;
     const sql = await llm.ask(prompt, { node: "graph.nl2sql" });
     const cleaned = sql.replace(/```sql|```/gi, "").trim();
 
-    // Enforce read-only
-    if (!/^\s*SELECT/i.test(cleaned)) {
-        throw new Error("Query must start with SELECT");
-    }
-    if (/\b(INSERT|UPDATE|DELETE|DROP|ATTACH|PRAGMA|ALTER|CREATE)\b/i.test(cleaned)) {
-        throw new Error("Only SELECT queries are allowed");
-    }
+    assertReadOnlySql(cleaned);
 
     const d = getDb();
     const rows = d.prepare(cleaned).all();
@@ -285,7 +279,40 @@ function formatRecentForPrompt(project, limit = 10) {
     return rows.map((r) => `[${r.type}] ${r.label}`).join("\n");
 }
 
+/**
+ * Reject anything that is not a single read-only SELECT.
+ *
+ * The NL->SQL layer hands an LLM-authored string straight to the database, so
+ * this is the only thing standing between a bad generation (or a prompt-injected
+ * one, since graph contents include text the agent read from the filesystem) and
+ * a destructive write. Extracted from askGraph so it is unit-testable without an
+ * API key — see test/security.test.js.
+ *
+ * Defence in depth, in order:
+ *  1. Must begin with SELECT (or a WITH .. SELECT CTE).
+ *  2. Must not mention any statement keyword that can mutate or reach outside
+ *     the database. REPLACE/VACUUM/REINDEX/DETACH are included because SQLite
+ *     accepts them even though the original list omitted them.
+ *  3. better-sqlite3's prepare() itself rejects multi-statement strings, which
+ *     is what stops "SELECT 1; DROP TABLE nodes" independently of this check.
+ */
+const FORBIDDEN_SQL = /\b(INSERT|UPDATE|DELETE|DROP|ATTACH|DETACH|PRAGMA|ALTER|CREATE|REPLACE|VACUUM|REINDEX|TRUNCATE|GRANT|EXEC)\b/i;
+
+function assertReadOnlySql(sql) {
+    const s = String(sql || "").trim();
+    if (!s) throw new Error("Empty query");
+    if (!/^\s*(SELECT|WITH)\b/i.test(s)) {
+        throw new Error("Query must start with SELECT");
+    }
+    const forbidden = s.match(FORBIDDEN_SQL);
+    if (forbidden) {
+        throw new Error(`Only SELECT queries are allowed (found ${forbidden[0].toUpperCase()})`);
+    }
+    return s;
+}
+
 module.exports = {
+    assertReadOnlySql,
     addNode,
     addEdge,
     recordEdit,

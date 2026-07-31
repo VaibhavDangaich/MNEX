@@ -7,7 +7,9 @@
   "description": "mnex — cognitive-architecture AI coding agent with stateful LangGraph planner-critic loop, 5-tier memory, causal work graph, local-first routing, GitHub integration, eval harness, and plugin SDK",
   "main": "bin/ai.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
+    "test": "node --test \"test/*.test.js\"",
+    "test:watch": "node --test --watch \"test/*.test.js\"",
+    "smoke": "node scripts/smoke.js",
     "postinstall": "node scripts/postinstall.js"
   },
   "keywords": [

@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # 18 is the floor declared in package.json engines. It is in the matrix
+        # deliberately: the chokidar v5 (ESM-only, Node >=20.19) regression that
+        # broke `require()` on Node 18 would have been caught here.
+        node: ["18", "20", "22"]
+        os: [ubuntu-latest]
+        include:
+          - node: "22"
+            os: macos-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+
+      # `npm ci` fails on a lockfile that disagrees with package.json, so this
+      # step also guards against the stale-lockfile breakage that previously
+      # made a fresh clone uninstallable.
+      - name: Install
+        run: npm ci --ignore-scripts
+
+      - name: Unit tests
+        run: npm test
+
+      - name: Smoke test (CLI loads, every command parses)
+        run: npm run smoke

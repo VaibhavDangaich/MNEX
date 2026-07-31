@@ -22,8 +22,16 @@ async function githubFetch(endpoint, token) {
     });
 
     if (!response.ok) {
-        const error = await response.text();
-        throw new Error(`GitHub API error: ${response.status} - ${error}`);
+        const body = await response.text();
+        // Carry the status and headers on the error object rather than only in
+        // the message. The durable engine needs them to tell a transient 502 or
+        // a rate limit (retry, honouring Retry-After / x-ratelimit-reset) from a
+        // deterministic 404 or 422 (never retry — retrying just burns quota).
+        const error = new Error(`GitHub API error: ${response.status} - ${body}`);
+        error.status = response.status;
+        error.headers = response.headers;
+        error.endpoint = endpoint;
+        throw error;
     }
 
     return response.json();
@@ -335,6 +343,80 @@ async function indexUserGitHub(token, supermemoryKey, options = {}) {
 }
 
 /**
+ * Durable variant of indexUserGitHub.
+ *
+ * Indexing an account is the longest-running thing mnex does — one pass over 50+
+ * repos is many hundreds of GitHub calls and can run for minutes, which is long
+ * enough to be interrupted by Ctrl-C, a closed laptop, or a rate limit. The
+ * non-durable version above restarts from zero, re-fetching and re-storing every
+ * repo that already succeeded.
+ *
+ * Here each repo is one durable step keyed by its full name, so a resumed run
+ * skips completed repos entirely and only does the remaining work. Transient
+ * failures retry with full-jitter backoff; deterministic ones (404 on a deleted
+ * repo, 403 on one you lost access to) fail that step and let the run continue.
+ *
+ * @param {object} options { maxRepos, includeStarred, resume, runId, onProgress }
+ */
+async function indexUserGitHubDurable(token, supermemoryKey, options = {}) {
+    const orchestration = require("../orchestration/engine");
+    const { maxRepos = 10, includeStarred = false, resume = false } = options;
+
+    const WORKFLOW = "github-index";
+
+    // Resuming reuses the previous run id, which is what makes the idempotency
+    // keys line up and lets completed steps short-circuit.
+    let runId = options.runId;
+    if (!runId && resume) {
+        const prior = orchestration.findResumableRun(WORKFLOW);
+        if (!prior) throw new Error("No interrupted github-index run to resume.");
+        runId = prior.run_id;
+    }
+
+    const run = orchestration.startRun(
+        WORKFLOW,
+        { maxRepos, includeStarred },
+        { runId, project: "github" }
+    );
+    runId = run.runId;
+
+    const repos = await orchestration.runStep(
+        runId,
+        "list-repos",
+        () => getUserRepos(token, { perPage: maxRepos }),
+        { input: { maxRepos } }
+    ).then((r) => r.result);
+
+    const units = repos.map((repo) => ({
+        name: `repo:${repo.full_name}`,
+        input: { full_name: repo.full_name },
+        run: () => indexRepo(repo.owner.login, repo.name, token, supermemoryKey),
+    }));
+
+    if (includeStarred) {
+        units.push({
+            name: "starred",
+            input: { limit: 20 },
+            run: async () => {
+                const starred = await getStarredRepos(token, 20);
+                const text = `[GitHub Starred Repos - Things I'm Interested In]\n\n` +
+                    starred.map((r) => `- ${r.full_name}: ${r.description || "No description"}`).join("\n");
+                await supermemory.store("github-starred", text, supermemoryKey);
+                return { count: starred.length };
+            },
+        });
+    }
+
+    const outcome = await orchestration.runAll(runId, units, {
+        continueOnError: true,
+        onProgress: options.onProgress,
+        onRetry: options.onRetry,
+    });
+
+    return { runId, ...outcome };
+}
+
+/**
  * Get current user info
  */
 async function getCurrentUser(token) {
@@ -343,6 +425,7 @@ async function getCurrentUser(token) {
 
 module.exports = {
     githubFetch,
+    indexUserGitHubDurable,
     getUserRepos,
     getRepoReadme,
     getPackageJson,
