@@ -163,6 +163,58 @@ $ mnex github --resume
 
 Engine: [`core/orchestration/engine.js`](core/orchestration/engine.js). Behaviour is covered by [`test/orchestration.test.js`](test/orchestration.test.js), including the property that matters — *a resumed run does not re-execute completed steps*.
 
+### Swapping in Temporal.io
+
+The embedded engine is the default because a globally-installed CLI shouldn't require a server. Teams that **already run Temporal** can opt in and get its event history, visibility UI and operational tooling instead — without any calling code changing.
+
+```bash
+npm i @temporalio/client @temporalio/worker @temporalio/workflow @temporalio/activity
+export MNEX_ORCHESTRATOR=temporal
+mnex workflow doctor          # verifies client → server → worker → activity
+mnex github --index --max 55
+```
+
+| | embedded *(default)* | temporal *(opt-in)* |
+|---|---|---|
+| Infrastructure | none | Temporal cluster or Temporal Cloud |
+| Durability | SQLite step log + idempotency keys | Temporal event history |
+| Node | ≥18 | ≥20.3 (SDK requirement) |
+| Install weight | 0 (already bundled) | ~147 extra packages |
+| Visibility | `mnex workflow show` | Temporal Web UI, `temporal workflow show` |
+| Works offline | yes | no |
+
+**What makes both backends interchangeable.** Temporal workflow code is replayed deterministically and runs in a sandbox, so it cannot capture a closure — it can only schedule work *by name*. Units of work are therefore declarative:
+
+```js
+{ name: "repo:acme/api", activity: "indexRepo", input: { owner: "acme", repo: "api" } }
+```
+
+The embedded engine resolves `activity` against [`core/orchestration/activities.js`](core/orchestration/activities.js) and calls it inline; the Temporal adapter hands the same descriptor to `proxyActivities`. Neither backend knows about the other.
+
+**Credentials are never placed in workflow input.** Temporal persists workflow history, so a token in workflow arguments would be written to the Temporal datastore in the clear. Activities resolve secrets from local config at call time, and they execute in *your* worker process — so tokens stay on the machine running `mnex worker`. This is asserted in [`test/temporal.test.js`](test/temporal.test.js).
+
+Worker lifecycle: `mnex github --index` starts an **ephemeral in-process worker** for the duration of the command, which is the right default for a CLI. For a shared cluster, run a long-lived `mnex worker` instead and the workflow will be picked up by that fleet.
+
+#### Verified durability, not asserted
+
+Run against a live dev server (`temporal server start-dev`) via [`scripts/verify/temporal-resume.js`](scripts/verify/temporal-resume.js) — it starts a worker, `SIGKILL`s it mid-run, starts a fresh one, and checks what re-executed:
+
+```
+1. starting worker A
+2. starting workflow mnex-verify-1785517089700 (6 repos)
+3. SIGKILL worker A — 3 completed, "repo3" in flight
+4. starting worker B (fresh process)
+==============================================================
+workflow result       : 6 completed, 0 failed
+distinct repos indexed: 6 of 6
+worker PIDs involved  : 2  (survived a worker SIGKILL)
+completed-then-rerun  : none  <-- must be none
+in-flight retried     : repo3  <-- expected: the interrupted one
+==============================================================
+```
+
+Note the honest result: the activity that was **in flight** when the worker died *was* retried, because its completion was never reported. Temporal activities are **at-least-once**, not exactly-once — only *completed* activities are never re-run. The embedded engine has the same property for a step left `in_flight` by a crash. This is why mnex activities are written to be idempotent (`supermemory.store` overwrites by key rather than appending).
+
 ### Durable outbound sync queue
 
 `cloudsync` deliberately swallows failures so a flaky network never blocks the UI. That is right for UX and wrong for data: an offline edit was previously lost for good. Failed syncs now land in a durable outbox ([`core/remote/queue.js`](core/remote/queue.js)) with backoff, de-duplication, and a poison-payload drop after `maxAttempts`, and drain on the next invocation.
@@ -210,8 +262,16 @@ To reproduce on your machine:
 ## Testing
 
 ```bash
-npm test        # 43 unit tests (node:test) — no API key required
+npm test        # 58 unit tests (node:test) — no API key, no Temporal server required
 npm run smoke   # module loading, CLI wiring, path resolution, packaging
+```
+
+The one test needing a real cluster is skipped unless `MNEX_TEMPORAL_ADDRESS` is set:
+
+```bash
+temporal server start-dev
+MNEX_TEMPORAL_ADDRESS=localhost:7233 npm test     # 58/58, nothing skipped
+node scripts/verify/temporal-resume.js            # crash-resume proof
 ```
 
 Unit tests deliberately cover only what is deterministic without a model: the durable engine's replay and retry semantics, the outbox, path resolution, watcher ignore rules, startup import graph, and the read-only SQL guard. LLM behaviour is covered separately by the eval harness (`mnex eval run`), which does need a key.
@@ -299,6 +359,8 @@ OLLAMA_MODEL=llama3.2:3b
 | `mnex workflow` | List durable runs and their step progress. |
 | `mnex workflow show --id <runId>` | Per-step status, attempts and errors. |
 | `mnex workflow prune --days 30` | Delete finished runs, reclaim pages. |
+| `mnex workflow doctor` | Show the active backend; probe Temporal if selected. |
+| `mnex worker` | Run a long-lived Temporal worker (opt-in backend only). |
 
 Set `GITHUB_TOKEN` in your `.env` or `~/.mnex.env`. Generate one at `github.com/settings/tokens/new` (read-only scopes are sufficient).
 
@@ -501,7 +563,10 @@ mnex/
 │   │   ├── conversation.js     # Multi-turn context (JSON, atomic writes)
 │   │   └── causal.js           # Causal work graph (SQLite + FTS5 + NL→SQL)
 │   ├── orchestration/
-│   │   └── engine.js           # Durable step log: idempotency, retries, resume
+│   │   ├── engine.js           # Durable step log: idempotency, retries, resume
+│   │   ├── activities.js       # Named activity registry (shared by both backends)
+│   │   ├── index.js            # Backend selection: embedded | temporal
+│   │   └── temporal/           # Opt-in Temporal.io adapter + workflow definitions
 │   ├── integrations/
 │   │   └── github.js           # GitHub REST API — durable repo/issue/PR indexing
 │   ├── remote/
@@ -561,7 +626,6 @@ The architecture leaves obvious next moves. The first three are the ones compara
 - **Fact invalidation** — close a validity window when a new fact contradicts an old one (Zep's temporal-knowledge-graph approach) instead of letting stale facts persist.
 - **DPO fine-tune** a small local model using `mnex suggest export` pairs.
 - **Embeddings over files** — semantic code search as an agent tool (beyond FTS5).
-- **Optional Temporal.io adapter** — the durable engine is intentionally embedded, but `runStep`/`runAll` are a narrow enough seam that a `MNEX_ORCHESTRATOR=temporal` backend could delegate to a real Temporal worker for users who already run a cluster, without changing any calling code.
 - **Team-shared memory** — the causal graph plus Supermemory already supports cross-device, but a shared "team tribal knowledge" layer is one auth hop away.
 - **Dashboard UI** — `web/` has a Vercel scaffold; wire `mnex stats` and `mnex profile` JSON endpoints.
 

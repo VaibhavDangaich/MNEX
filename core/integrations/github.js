@@ -31,6 +31,12 @@ async function githubFetch(endpoint, token) {
         error.status = response.status;
         error.headers = response.headers;
         error.endpoint = endpoint;
+        // Temporal classifies retries by error *type*, so deterministic 4xx are
+        // given a name its retry policy lists as non-retryable. The embedded
+        // engine classifies by status instead; both agree on the outcome.
+        if (response.status >= 400 && response.status < 500 && response.status !== 429) {
+            error.name = "NonRetryableGitHubError";
+        }
         throw error;
     }
 
@@ -380,31 +386,24 @@ async function indexUserGitHubDurable(token, supermemoryKey, options = {}) {
     );
     runId = run.runId;
 
+    // Units are described as named activities rather than closures so the exact
+    // same descriptors can be handed to the Temporal backend, whose workflow
+    // code cannot capture a closure. See core/orchestration/activities.js.
     const repos = await orchestration.runStep(
         runId,
         "list-repos",
-        () => getUserRepos(token, { perPage: maxRepos }),
+        () => require("../orchestration/activities").resolve("listRepos")({ maxRepos }),
         { input: { maxRepos } }
     ).then((r) => r.result);
 
     const units = repos.map((repo) => ({
         name: `repo:${repo.full_name}`,
-        input: { full_name: repo.full_name },
-        run: () => indexRepo(repo.owner.login, repo.name, token, supermemoryKey),
+        activity: "indexRepo",
+        input: { owner: repo.owner, repo: repo.name },
     }));
 
     if (includeStarred) {
-        units.push({
-            name: "starred",
-            input: { limit: 20 },
-            run: async () => {
-                const starred = await getStarredRepos(token, 20);
-                const text = `[GitHub Starred Repos - Things I'm Interested In]\n\n` +
-                    starred.map((r) => `- ${r.full_name}: ${r.description || "No description"}`).join("\n");
-                await supermemory.store("github-starred", text, supermemoryKey);
-                return { count: starred.length };
-            },
-        });
+        units.push({ name: "starred", activity: "indexStarred", input: { limit: 20 } });
     }
 
     const outcome = await orchestration.runAll(runId, units, {

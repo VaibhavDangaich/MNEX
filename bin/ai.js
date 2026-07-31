@@ -945,10 +945,19 @@ program
                 console.log(`   Include starred: ${options.starred ? "yes" : "no"}`);
                 console.log(`   Durable: every repo is a checkpointed step; ^C is safe\n`);
 
-                const result = await github.indexUserGitHubDurable(githubToken, supermemoryKey, {
+                const orchestration = require("../core/orchestration");
+                const backend = orchestration.backendName();
+                if (backend === "temporal") {
+                    console.log(`   Backend: Temporal.io (${require("../core/orchestration/temporal/adapter").settings().address})\n`);
+                }
+
+                const result = await orchestration.runGithubIndex({
+                    githubToken,
+                    supermemoryKey,
                     maxRepos: parseInt(options.max),
                     includeStarred: options.starred,
                     resume: Boolean(options.resume),
+                    onStart: ({ workflowId }) => console.log(`   workflow: ${workflowId}`),
                     onProgress: ({ completed, skipped, failed, total, name }) => {
                         const done = completed + skipped + failed;
                         const tag = skipped && name ? " (already done, skipped)" : "";
@@ -961,12 +970,17 @@ program
 
                 console.log("\n" + "─".repeat(40));
                 console.log(`✅ GitHub Indexing Complete!`);
-                console.log(`   run id:          ${result.runId}`);
+                console.log(`   backend:         ${result.backend}`);
+                console.log(`   run id:          ${result.runId || result.workflowId}`);
                 console.log(`   📦 newly indexed: ${result.completed}`);
-                console.log(`   ⏭️  skipped:       ${result.skipped} (already done in a previous run)`);
+                if (result.backend === "embedded") {
+                    console.log(`   ⏭️  skipped:       ${result.skipped} (already done in a previous run)`);
+                }
                 if (result.failed > 0) {
                     console.log(`   ⚠️  failed:        ${result.failed}`);
-                    console.log(`   Re-run with: mnex github --resume`);
+                    console.log(result.backend === "temporal"
+                        ? `   Inspect with: temporal workflow show --workflow-id ${result.workflowId}`
+                        : `   Re-run with: mnex github --resume`);
                 }
                 console.log("\n🧠 Your GitHub knowledge is now in your AI's memory!");
                 console.log('   Try: mnex ask "what projects am I working on?"\n');
@@ -2176,12 +2190,42 @@ pluginCmd
 // ============================================
 program
     .command("workflow [action]")
-    .description("Inspect durable runs: list | show <id> | resume | prune")
+    .description("Inspect durable runs: list | show <id> | resume | prune | doctor")
     .option("--id <runId>", "Target a specific run")
     .option("--days <n>", "Retention window for prune", "30")
     .option("--json", "Machine-readable output")
     .action(async (action = "list", options) => {
         const engine = require("../core/orchestration/engine");
+
+        if (action === "doctor") {
+            const orchestration = require("../core/orchestration");
+            const temporal = require("../core/orchestration/temporal/adapter");
+            console.log(`\n🩺 Orchestrator`);
+            console.log("─".repeat(50));
+            console.log(`Active backend:  ${orchestration.backendName()}`);
+            console.log(`SDK installed:   ${temporal.isAvailable() ? "yes" : "no"}`);
+
+            if (!temporal.isEnabled()) {
+                console.log(`\nUsing the built-in embedded engine (no server required).`);
+                console.log(`To use Temporal instead:`);
+                console.log(`   npm i @temporalio/client @temporalio/worker @temporalio/workflow @temporalio/activity`);
+                console.log(`   export MNEX_ORCHESTRATOR=temporal\n`);
+                return;
+            }
+
+            console.log(`\nProbing ${temporal.settings().address} …`);
+            const res = await temporal.doctor();
+            if (res.ok) {
+                console.log(`✅ round trip OK — client → server → worker → activity`);
+                console.log(`   namespace:  ${res.namespace}`);
+                console.log(`   task queue: ${res.taskQueue}\n`);
+            } else {
+                console.log(`❌ ${res.error}`);
+                console.log(`   Start a dev server with:  temporal server start-dev\n`);
+                process.exitCode = 1;
+            }
+            return;
+        }
 
         if (action === "prune") {
             const res = engine.prune({ days: parseInt(options.days) });
@@ -2245,6 +2289,45 @@ program
         }
         console.log("\nInspect one:  mnex workflow show --id <runId>");
         console.log("Clean up:     mnex workflow prune --days 30\n");
+    });
+
+// ============================================
+// WORKER — long-lived Temporal worker (opt-in)
+// ============================================
+program
+    .command("worker")
+    .description("Run a long-lived Temporal worker (requires MNEX_ORCHESTRATOR=temporal)")
+    .option("--task-queue <name>", "Override the task queue")
+    .action(async (options) => {
+        const temporal = require("../core/orchestration/temporal/adapter");
+
+        if (!temporal.isEnabled()) {
+            console.log("\nmnex is using the embedded engine, which needs no worker.");
+            console.log("Set MNEX_ORCHESTRATOR=temporal to use Temporal.io.\n");
+            return;
+        }
+        try {
+            temporal.assertAvailable();
+        } catch (err) {
+            console.error(`\n${err.message}\n`);
+            process.exitCode = 1;
+            return;
+        }
+
+        const cfg = temporal.settings();
+        const worker = await temporal.startWorker({ taskQueue: options.taskQueue });
+        console.log(`\n👷 mnex worker running`);
+        console.log(`   server:     ${cfg.address}`);
+        console.log(`   namespace:  ${cfg.namespace}`);
+        console.log(`   task queue: ${options.taskQueue || cfg.taskQueue}`);
+        console.log(`\nActivities run in this process, so credentials never enter workflow history.`);
+        console.log(`Ctrl-C to stop. In-flight activities drain first.\n`);
+
+        const stop = () => worker.shutdown();
+        process.on("SIGINT", stop);
+        process.on("SIGTERM", stop);
+        await worker.run();
+        console.log("\nWorker stopped.\n");
     });
 
 program.parse(process.argv);

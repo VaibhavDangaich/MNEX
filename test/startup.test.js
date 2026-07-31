@@ -15,14 +15,15 @@ const path = require("path");
 
 const ROOT = path.join(__dirname, "..");
 
-/** Names of langchain packages imported while loading `modulePath`. */
-function langchainImportsFor(modulePath) {
+/** Names of heavy packages imported while loading `modulePath`. */
+function heavyImportsFor(modulePath, pattern = "^(langchain|@langchain)") {
     const script = `
         const M = require("module");
         const orig = M.prototype.require;
         const hit = new Set();
+        const re = new RegExp(${JSON.stringify(pattern)});
         M.prototype.require = function (id) {
-            if (/^(langchain|@langchain)/.test(id)) hit.add(id.split("/").slice(0, 2).join("/"));
+            if (re.test(id)) hit.add(id.split("/").slice(0, 2).join("/"));
             return orig.apply(this, arguments);
         };
         require(${JSON.stringify(modulePath)});
@@ -30,6 +31,8 @@ function langchainImportsFor(modulePath) {
     `;
     return JSON.parse(execFileSync(process.execPath, ["-e", script], { encoding: "utf8" }).trim());
 }
+
+const langchainImportsFor = (p) => heavyImportsFor(p);
 
 test("the terminal logger does not import LangChain", () => {
     // core/monitor/terminal is loaded by `mnex log`, which the zsh hook runs
@@ -71,6 +74,40 @@ test("`mnex --version` runs without loading LangChain", () => {
     const out = execFileSync(process.execPath, ["-e", script], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
     // stderr carries the marker; stdout carries commander's version output.
     assert.ok(true, out);
+});
+
+test("the Temporal SDK is not imported unless the backend is selected", () => {
+    // @temporalio/worker is heavy (a Rust core bridge) and optional. Selecting
+    // the embedded backend must not pay for it, and a user who never installs it
+    // must not hit MODULE_NOT_FOUND on ordinary commands.
+    for (const m of [
+        ["orchestration", "engine"],
+        ["orchestration", "activities"],
+        ["orchestration", "index"],
+        ["monitor", "terminal"],
+    ]) {
+        const imports = heavyImportsFor(path.join(ROOT, "core", ...m), "^@temporalio");
+        assert.deepStrictEqual(imports, [],
+            `core/${m.join("/")} eagerly imported: ${imports.join(", ")}`);
+    }
+});
+
+test("selecting the embedded backend loads no Temporal code", () => {
+    const script = `
+        process.env.MNEX_ORCHESTRATOR = "";
+        const M = require("module");
+        const orig = M.prototype.require;
+        const hit = new Set();
+        M.prototype.require = function (id) {
+            if (/^@temporalio/.test(id)) hit.add(id);
+            return orig.apply(this, arguments);
+        };
+        const o = require(${JSON.stringify(path.join(ROOT, "core", "orchestration"))});
+        o.backendName();
+        console.log(JSON.stringify([...hit]));
+    `;
+    const out = JSON.parse(execFileSync(process.execPath, ["-e", script], { encoding: "utf8" }).trim());
+    assert.deepStrictEqual(out, [], `backend selection imported: ${out.join(", ")}`);
 });
 
 test("bin/ai.js has no eager top-level require of a model-backed module", () => {

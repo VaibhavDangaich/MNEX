@@ -81,7 +81,7 @@ check("`mnex --version` matches package.json", () => {
 // stale silently — this turns that into a build failure.
 const DOCUMENTED = [
     "ask", "graph", "profile", "review", "github", "eval", "suggest", "stats",
-    "plugin", "workflow", "remember", "task", "memory", "status", "history",
+    "plugin", "workflow", "worker", "remember", "task", "memory", "status", "history",
     "watch", "errors", "focus", "sync", "handoff", "service", "journal",
     "projects", "decide", "learned", "snippet", "remind", "knowledge", "init",
 ];
@@ -153,6 +153,15 @@ check("declared engines are compatible with the installed deps", () => {
     );
     if (chokidarPkg.type === "module") {
         throw new Error("chokidar is ESM-only; require() will fail on the declared Node range");
+    }
+});
+
+check("the optional Temporal SDK has not become a hard dependency", () => {
+    // @temporalio/* needs Node >=20.3 while this package advertises >=18.
+    const hard = Object.keys(pkg.dependencies).filter((d) => d.startsWith("@temporalio"));
+    if (hard.length) throw new Error(`must stay optional: ${hard.join(", ")}`);
+    if (pkg.engines.node !== ">=18.0.0") {
+        throw new Error(`engine floor changed to ${pkg.engines.node}`);
     }
 });
 
