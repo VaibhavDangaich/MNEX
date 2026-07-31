@@ -779,7 +779,7 @@ program
         const apiKey = config.get("supermemory.apiKey");
         if (!apiKey) {
             console.log("❌ No Supermemory API key configured");
-            console.log("   Run 'ai init' to set up cloud sync\n");
+            console.log("   Run 'mnex init' to set up cloud sync\n");
             return;
         }
 
@@ -826,7 +826,7 @@ program
         const apiKey = config.get("supermemory.apiKey");
         if (!apiKey) {
             console.log("❌ No Supermemory API key configured");
-            console.log("   Run 'ai init' to enable multi-device sync\n");
+            console.log("   Run 'mnex init' to enable multi-device sync\n");
             return;
         }
 
@@ -898,7 +898,7 @@ program
 
         if (!supermemoryKey && options.index) {
             console.log("❌ Supermemory API key required for indexing");
-            console.log("   Run 'ai init' to set up Supermemory\n");
+            console.log("   Run 'mnex init' to set up Supermemory\n");
             return;
         }
 
@@ -1017,7 +1017,7 @@ program
             const entries = journal.readJournalEntries(cwd, 7);
             if (entries.length === 0) {
                 console.log("No journal entries found.\n");
-                console.log("Create your first entry with: ai journal\n");
+                console.log("Create your first entry with: mnex journal\n");
                 return;
             }
 
@@ -1087,7 +1087,7 @@ program
             const projects = crossproject.getProjects();
             if (projects.length === 0) {
                 console.log("No projects registered yet.\n");
-                console.log("Register projects with: ai projects --add /path/to/project\n");
+                console.log("Register projects with: mnex projects --add /path/to/project\n");
                 return;
             }
             console.log(`📁 ${projects.length} registered projects:\n`);
@@ -1119,7 +1119,7 @@ program
         if (options.indexOne) {
             if (!supermemoryKey) {
                 console.log("❌ Supermemory API key required for indexing");
-                console.log("   Run 'ai init' to configure\n");
+                console.log("   Run 'mnex init' to configure\n");
                 return;
             }
             const projectPath = path.resolve(options.indexOne);
@@ -1135,7 +1135,7 @@ program
         if (options.index) {
             if (!supermemoryKey) {
                 console.log("❌ Supermemory API key required for indexing");
-                console.log("   Run 'ai init' to configure\n");
+                console.log("   Run 'mnex init' to configure\n");
                 return;
             }
             console.log("📥 Indexing all registered projects...\n");
@@ -1146,7 +1146,7 @@ program
                 console.log(`⚠️  ${result.errors.length} errors`);
             }
             console.log('\n🧠 Cross-project search enabled!');
-            console.log('   Try: ai projects --search "authentication"\n');
+            console.log('   Try: mnex projects --search "authentication"\n');
             return;
         }
 
@@ -1291,7 +1291,7 @@ program
         if (alternatives.length > 0) {
             console.log(`   Alternatives: ${alternatives.join(", ")}`);
         }
-        console.log("\nSearch later with: ai decide --search \"keyword\"\n");
+        console.log("\nSearch later with: mnex decide --search \"keyword\"\n");
     });
 
 // ============================================
@@ -1338,7 +1338,7 @@ program
         console.log("✅ Learning captured!\n");
         console.log(`💡 "${insight}"`);
         console.log(`   Category: ${options.category || "general"}`);
-        console.log("\nSearch later with: ai learned --search \"keyword\"\n");
+        console.log("\nSearch later with: mnex learned --search \"keyword\"\n");
     });
 
 // ============================================
@@ -1499,7 +1499,7 @@ program
             console.log("   All items synced to cloud for cross-device access.\n");
         } else {
             console.log("☁️  Supermemory: Not configured");
-            console.log("   Run 'ai init' to enable cloud sync.\n");
+            console.log("   Run 'mnex init' to enable cloud sync.\n");
         }
 
         console.log("Commands:");
@@ -1562,7 +1562,7 @@ program
                 envContent += `LLM_PROVIDER=gemini\n`;
                 envContent += `GEMINI_API_KEY=${apiKey.trim()}\n`;
             } else {
-                console.log("Invalid choice. Run 'ai init' again.");
+                console.log("Invalid choice. Run 'mnex init' again.");
                 rl.close();
                 return;
             }
@@ -1640,7 +1640,7 @@ program
                 console.log("No focus set yet.");
                 console.log("\n💡 Focus is auto-set when you:");
                 console.log("   • Edit and save a file");
-                console.log("   • Run: ai focus <path>");
+                console.log("   • Run: mnex focus <path>");
                 console.log("   • Change directory in terminal\n");
             }
         }
@@ -1672,7 +1672,7 @@ program
                         for (const missing of configCheck.missing) {
                             console.log(`   • ${missing}`);
                         }
-                        console.log("\n💡 Run 'ai init' to configure your API keys first.");
+                        console.log("\n💡 Run 'mnex init' to configure your API keys first.");
                         
                         // Prompt user
                         const rl = readline.createInterface({
@@ -1681,7 +1681,7 @@ program
                         });
                         
                         const answer = await new Promise(resolve => {
-                            rl.question("\nWould you like to run 'ai init' now? (y/n): ", resolve);
+                            rl.question("\nWould you like to run 'mnex init' now? (y/n): ", resolve);
                         });
                         rl.close();
                         
@@ -1752,7 +1752,7 @@ program
                     console.log(`  Proactive Mode:   ${pa.success ? "✅ " + pa.message : "❌ " + pa.message}`);
 
                     console.log("\n💡 Services are configured to auto-start on login.");
-                    console.log("   View logs: ai service logs");
+                    console.log("   View logs: mnex service logs");
                     console.log("");
                 } catch (e) {
                     console.error("❌ Failed to start services:", e.message);
@@ -1828,7 +1828,7 @@ program
                     console.log(`  ${runningCount}/3 services running\n`);
 
                     if (runningCount < 3) {
-                        console.log("💡 Start all services: ai service start\n");
+                        console.log("💡 Start all services: mnex service start\n");
                     }
                 } catch (e) {
                     console.error("❌ Failed to get status:", e.message);
@@ -1849,7 +1849,7 @@ program
                         console.log("No logs yet. Service may not have started.");
                     }
                     console.log("\n" + "─".repeat(40));
-                    console.log("Clear logs: ai service logs --clear\n");
+                    console.log("Clear logs: mnex service logs --clear\n");
                 }
                 break;
 
@@ -1894,7 +1894,7 @@ program
             console.log("✅ API Key: Configured");
         } else {
             console.log("❌ API Key: Not configured");
-            console.log("   Run: ai init\n");
+            console.log("   Run: mnex init\n");
         }
 
         console.log("\n🚀 Quick Start (Recommended):");
@@ -2145,7 +2145,7 @@ pluginCmd
         if (!plugins.length) {
             console.log("No plugins installed.");
             console.log(`\nInstall by dropping a .js file into: ${loader.USER_PLUGIN_DIR}`);
-            console.log("Or scaffold one with: ai plugin scaffold <name>");
+            console.log("Or scaffold one with: mnex plugin scaffold <name>");
             return;
         }
         for (const p of plugins) {
