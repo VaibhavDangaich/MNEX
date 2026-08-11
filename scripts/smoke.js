@@ -80,7 +80,7 @@ check("`mnex --version` matches package.json", () => {
 // Commands the README documents. If one is renamed or dropped, the docs go
 // stale silently — this turns that into a build failure.
 const DOCUMENTED = [
-    "ask", "graph", "profile", "review", "github", "eval", "suggest", "stats",
+    "ask", "graph", "profile", "review", "mutate", "github", "eval", "suggest", "stats",
     "plugin", "workflow", "worker", "remember", "task", "memory", "status", "history",
     "watch", "errors", "focus", "sync", "handoff", "service", "journal",
     "projects", "decide", "learned", "snippet", "remind", "knowledge", "init",

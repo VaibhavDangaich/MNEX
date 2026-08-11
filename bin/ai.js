@@ -2110,6 +2110,43 @@ program
     });
 
 // ============================================
+// ai mutate — Diff-scoped mutation gate
+// ============================================
+program
+    .command("mutate")
+    .description("Mutation-test the current diff: did this change raise coverage without raising the safety net?")
+    .option("-t, --target <ref>", "Diff base (default: HEAD)", "HEAD")
+    .option("--dry-run", "Print the scoped lines and exit")
+    .option("--json", "Machine-readable output on stdout")
+    .action(async (options) => {
+        // Lazy: this pulls in a parser and spawns processes. `mnex log` runs
+        // after every shell command, so nothing heavy may load at module scope.
+        const mutate = require("../core/mutate");
+        try {
+            const scope = mutate.scope({ target: options.target });
+
+            if (options.json) {
+                // stdout carries the report and nothing else, so `> report.json`
+                // in CI stays valid JSON. Progress belongs on stderr.
+                console.log(JSON.stringify({
+                    ...scope,
+                    files: scope.files.map((f) => ({ ...f })),
+                }, null, 2));
+                return;
+            }
+
+            console.log(mutate.formatScope(scope));
+
+            if (!options.dryRun) {
+                console.log("  Mutant generation lands in the next phase — use --dry-run for now.\n");
+            }
+        } catch (e) {
+            console.error(e.message);
+            process.exitCode = 1;
+        }
+    });
+
+// ============================================
 // ai suggest — Preference learning feedback
 // ============================================
 const suggestCmd = program.command("suggest").description("Manage suggestion feedback");
