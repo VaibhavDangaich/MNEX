@@ -2114,7 +2114,7 @@ program
 // ============================================
 program
     .command("mutate")
-    .description("Mutation-test the current diff: did this change raise coverage without raising the safety net?")
+    .description("Mutation gate (preview: diff scoping) — which changed lines would be mutation-tested, and what a run will judge")
     .option("-t, --target <ref>", "Diff base (default: HEAD)", "HEAD")
     .option("--dry-run", "Print the scoped lines and exit")
     .option("--json", "Machine-readable output on stdout")

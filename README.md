@@ -340,6 +340,22 @@ OLLAMA_MODEL=llama3.2:3b
 | `mnex review` | Three agents (reviewer, tester, docsmith) fan-out over `git diff HEAD`. |
 | `mnex review -t main` | Diff against a specific ref. |
 
+### Mutation gate
+
+`mnex review` asks an LLM whether a change looks under-tested. `mnex mutate` settles it empirically: break the changed code on purpose, re-run the suite, and count how many breakages nobody noticed.
+
+The problem it exists for is that coverage measures *execution*, not *verification* — a test can run every changed line while asserting nothing about any of them. It reads `git diff` and nothing else, so it is indifferent to what wrote the change: an agent, a teammate, or you at 2am.
+
+| Command | What it does |
+|---|---|
+| `mnex mutate --dry-run` | Print the changed source lines a mutation run would target. |
+| `mnex mutate -t main` | Scope against a specific ref instead of `HEAD`. |
+| `mnex mutate --json` | Machine-readable scope, for CI. |
+
+Formatting-only edits are excluded — the diff is taken twice, once with `-w --ignore-blank-lines`, and the two line sets intersected. Untracked files count as fully added, because an agent that writes a new file leaves it untracked until `git add` and answering "nothing to mutate" there would be actively misleading. An unresolvable ref fails loudly rather than reporting an empty scope; a gate that silently passes is worse than no gate.
+
+**Status: preview, shipped in v1.6.** Diff scoping is live — `mnex mutate --dry-run` shows exactly which lines a run would target. Mutant generation, execution and the coverage-vs-mutation verdict land in the next releases.
+
 ### GitHub integration
 
 | Command | What it does |
@@ -628,6 +644,7 @@ The architecture leaves obvious next moves. The first three are the ones compara
 - **Embeddings over files** — semantic code search as an agent tool (beyond FTS5).
 - **Team-shared memory** — the causal graph plus Supermemory already supports cross-device, but a shared "team tribal knowledge" layer is one auth hop away.
 - **Dashboard UI** — `web/` has a Vercel scaffold; wire `mnex stats` and `mnex profile` JSON endpoints.
+- **Finish the mutation gate** — `mnex mutate` scopes a diff today. Next: acorn-based mutant generation, an in-memory `--require` sandbox so no mutant ever touches the working tree, test selection by V8 coverage at the mutation offset, and a verdict that reports the gap between line coverage and mutation score on the changed lines.
 
 ---
 
